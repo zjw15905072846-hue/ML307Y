@@ -1,0 +1,4 @@
+kernel/prebuilts/open_mode/libs/lib__idf_drivers.a filter=lfs diff=lfs merge=lfs -text
+kernel/prebuilts/single_mode/libs/lib__idf_drivers.a filter=lfs diff=lfs merge=lfs -text
+kernel/prebuilts/open_mode/libs/lib__idf_kernel_usbx.a filter=lfs diff=lfs merge=lfs -text
+kernel/prebuilts/single_mode/libs/lib__idf_kernel_usbx.a filter=lfs diff=lfs merge=lfs -text

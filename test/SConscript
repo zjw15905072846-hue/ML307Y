@@ -1,0 +1,56 @@
+# -*- coding: utf-8 -*-
+# ===================================================================
+#
+# Copyright © 2025 China Mobile IOT. All rights reserved.
+#
+#
+# ===================================================================
+
+
+import os
+Import('env', 'root_dir')
+
+
+build_list = [
+    'demo_main',
+    'uart',
+    'virt_at',
+    'fs',
+    'ntp',
+    'http',
+    #'asocket',
+    'socket',
+    #'ssl',
+    'mqtt',
+    'gpio',
+    'pm',
+    'pwm',
+    'adc',
+    'spi',
+    'i2c',
+    'sif2',
+    'powerkey',
+    'sms',
+    'modem',
+    #'sd',
+    #'spi_lcd',
+    'fota',
+    'ftp',
+    #'utils',
+    #'wifiscan',
+    #'sys',
+    'ping',
+    'rtc',
+    #'audio',
+    #'deepseek',
+    'lwip',
+    'lwm2m',
+]
+
+objects = []
+for mod in build_list:
+    script = os.path.join(mod, 'SConscript')  # 必须使用相对路径
+    objects.extend(SConscript(script))  # 输出项合并至list
+
+
+Return('objects')

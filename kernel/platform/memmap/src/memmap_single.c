@@ -1,0 +1,14 @@
+const unsigned int fota_code_prime_len = 0x25000;
+const unsigned int ap_flash_base_addr = 0x600E1000;
+const unsigned int ap_flash_base_len = 0xCB000;
+const unsigned int app_bin_partition_len = 0;
+const unsigned int app_bin_used_peak_size = 0;
+const unsigned int working_fs_len = 0x10000;
+const unsigned int user_fs_flash_base = 0;
+const unsigned int user_fs_flash_len = 0;
+const unsigned int user_flash_base = 0x601BC000;
+const unsigned int user_flash_len = 0x4000;
+const unsigned int fota_pkt_region_base = 0x601C0000;
+const unsigned int fota_pkt_region_len = 0x2C000;
+const unsigned int nv_ps_sms_base = 0;
+const unsigned int nv_ps_sms_len = 0;

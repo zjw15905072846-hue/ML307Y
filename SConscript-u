@@ -1,0 +1,156 @@
+# -*- coding: utf-8 -*-
+# ===================================================================
+#
+# Copyright © 2023 China Mobile IOT. All rights reserved.
+#
+# Date:     2023/02/24
+# Author:   zhangxw
+# Modify:   by zhangxw@2023/6/16，适配ML307R平台
+# Function: scons工程文件
+#
+# ===================================================================
+
+
+import glob
+import os
+import stat
+import sys
+
+from EnvironConfig import *
+from TestDefine import *
+Import('env', 'root_dir')
+
+
+# 加载编译模块，实现源码与编译文件分离
+compnent_list = [
+    'src',
+    'third-party',
+]
+
+if env['DEMO_SUPPORT'].lower() != 'n':  # 编译demo
+    compnent_list.append('examples')
+    demo_support = env['DEMO_SUPPORT'].lower()
+    Export('demo_support')
+elif env['TEST_SUPPORT'].lower() == 'y':  # 编译test程序
+    compnent_list.append('test')
+    test_support_def = []
+    for k, v in TestSelect.TestSupport.items():  # 检索test宏定义
+        if v.lower() == 'y':
+            test_support_def.append(k)
+    env.PrependUnique(CPPDEFINES=test_support_def)
+elif env['XY_TEST_SUPPORT'].lower() == 'y':  # 编译xydemo程序
+    compnent_list.append('xydemo')
+else:
+    compnent_list.append('custom')
+
+objects = []
+for compnent in compnent_list:
+    object = SConscript(os.path.join(compnent, 'SConscript'))
+    objects.extend(object)
+
+# 检索lib库中的.a文件和.o文件
+lib_path = os.path.join(Dir('#').abspath, 'prebuild', 'libs')
+lib_files = os.listdir(lib_path)
+libs = []
+for lib in lib_files:
+    if lib.endswith('.a'):
+        libs.append(lib)
+    elif lib.endswith('.o'):
+        objects.append(os.path.join(lib_path, lib))
+
+
+# 生成可执行文件
+elf = env.Program(os.path.join(
+    env['IMAGE_DIR'], env['TARGET_NAME']), objects, LIBS=libs)
+map = env.File(str(elf[0]).replace(".elf", ".map"))
+app_flash_bin_origin = env.Binary(os.path.join(
+    env['IMAGE_ORIGIN_DIR'], 'app_flash.bin'), elf, SECTIONS=[
+        '.image_header', '.flash.text', '.flash.rodata'])
+app_psram_bin_origin = env.Binary(os.path.join(env['IMAGE_ORIGIN_DIR'], 'app_psram.bin'), elf, SECTIONS=[
+    '.psram.text', '.psram.rodata', '.psram.data'])
+
+lds = env.GenLds(os.path.join(env['IMAGE_DIR'], 'linker'), env['LDS_SRC'])
+asm = env.GenAsm(elf)
+img = os.path.join(env['IMAGE_DIR'], 'app.img')
+app_flash_bin = os.path.join(env['IMAGE_DIR'], 'app_flash.bin')
+app_psram_bin = os.path.join(env['IMAGE_DIR'], 'app_psram.bin')
+compress_bin = env.Compress([app_flash_bin, app_psram_bin], [
+                            app_flash_bin_origin, app_psram_bin_origin])
+img = env.GenImg(img, [app_flash_bin, app_psram_bin])
+
+
+# 安装生成固件包
+pkg_dir = os.path.join(env['IMAGE_DIR'], 'pkg')
+app_dir = os.path.join(pkg_dir, 'app_elf')
+Mkdir(pkg_dir)  #
+Mkdir(app_dir)  #
+
+# 安装预编译的images和编译生成的images，处理同名文件冲突
+def install_images_with_priority(env, pkg_dir, root_dir):
+    # 收集所有需要安装的文件，以路径为key，文件对象为value存储
+    files_to_install = {}
+    
+    # 先处理tools/images目录的文件（较低优先级）
+    images_glob = Glob('tools/images/**/*')
+    images_root_files = Glob('tools/images/*')
+    all_images_files = images_root_files + images_glob
+    for image_file in all_images_files:
+        # 检查是否为文件而不是目录
+        if os.path.isfile(str(image_file)):
+            rel_path = os.path.relpath(str(image_file), os.path.join(root_dir, 'tools', 'images'))
+            target_path = os.path.join(pkg_dir, rel_path)
+            files_to_install[target_path] = image_file
+    
+    # 后处理prebuild/baseline目录的文件（较高优先级），覆盖同名文件
+    bs_glob = Glob('prebuild/baseline/**/*')
+    bs_root_files = Glob('prebuild/baseline/*')
+    all_bs_files = bs_root_files + bs_glob
+    for bs_file in all_bs_files:
+        # 检查是否为文件而不是目录
+        if os.path.isfile(str(bs_file)):
+            rel_path = os.path.relpath(str(bs_file), os.path.join(root_dir, 'prebuild', 'baseline'))
+            target_path = os.path.join(pkg_dir, rel_path)
+            files_to_install[target_path] = bs_file  # 高优先级文件覆盖低优先级文件
+    
+    # 执行安装
+    installed_files = []
+    for target_path, source_file in files_to_install.items():
+        # 确保目标目录存在
+        target_dir = os.path.dirname(target_path)
+        Mkdir(target_dir)
+        installed_files.append(env.InstallAs(target_path, source_file))
+    return installed_files
+
+# 调用函数执行安装，并获取安装目标列表
+installed_baseline_images = install_images_with_priority(env, pkg_dir, root_dir)
+
+installed_baseline_images.extend(env.Install(pkg_dir, img))
+installed_baseline_images.extend(env.Install(app_dir, [elf, asm, map]))
+
+# 创建安装文件伪目标
+all_install_done = env.Alias('all_install_done', installed_baseline_images)
+
+# 安装完成后打包mimgx固件
+pack_script = os.path.join(env['SCRIPTS_DIR'], 'pack', 'main.py')
+pack_imgx = os.path.join(env['IMAGE_DIR'], env['TARGET_NAME'] + '.mimgx')
+pack_target = env.Command(pack_imgx, [], '@python "%s" -m "%s" "%s"' % (pack_script, pkg_dir, pack_imgx))
+
+
+# Ensure linking is re-run when the external linker script `import_func.ld` is updated
+import_func_ld = os.path.join(root_dir, 'prebuild', 'ld', 'import_func.ld')
+# Use Depends so SCons will rebuild `elf` when the linker script timestamp/content changes
+env.Depends(elf, env.File(import_func_ld))
+env.Depends(app_flash_bin_origin, elf)
+env.Depends(app_psram_bin_origin, elf)
+env.Depends(compress_bin, app_flash_bin_origin)
+env.Depends(compress_bin, app_psram_bin_origin)
+env.Depends(img, compress_bin)
+env.Depends(pack_target, all_install_done)
+
+env.AlwaysBuild(img)
+env.Clean(elf, map)  # 执行scons -c时删除与elf相关的附加文件
+env.Clean(elf, os.path.join(env['IMAGE_DIR'], 'DBG'))
+env.Clean(elf, os.path.join(env['IMAGE_DIR'], 'origin_bins'))
+env.Clean(elf, pkg_dir)
+env.Clean(elf, pack_imgx)
+env.Requires(elf, lds)

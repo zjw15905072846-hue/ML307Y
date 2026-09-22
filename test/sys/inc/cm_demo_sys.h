@@ -1,0 +1,43 @@
+/**
+ * @file        cm_demo_ntp.h
+ * @brief       ntp示例
+ * @copyright   Copyright © 2022 China Mobile IOT. All rights reserved.
+ */
+
+#ifndef _CM_DEMO_SYS_H_
+#define _CM_DEMO_SYS_H_
+
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+#include <stdint.h>
+#include "embedded_cli.h"
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+#ifdef __cplusplus
+#define EXTERN extern "C"
+extern "C"
+{
+#else
+#define EXTERN extern
+#endif
+
+
+/**
+ * @brief  
+ *
+ * @return  void
+ *
+ * @details More details
+ */
+void cm_test_sys(EmbeddedCli *cli, char *args, void *context);
+
+#undef EXTERN
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _CM_DEMO_SYS_H_ */

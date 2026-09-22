@@ -1,0 +1,121 @@
+# -*- coding: utf-8 -*-
+# ===================================================================
+#
+# Copyright © 2026 China Mobile IOT. All rights reserved.
+#
+# Date:     2026/01/16
+# Author:   cmiot0752
+# Function: scons工程文件，kernel编译
+#
+# ===================================================================
+
+
+import os,stat
+import sys
+import glob
+from EnvironConfig import *
+Import('env', 'root_dir')
+
+# 加载编译模块，实现源码与编译文件分离
+plat_list = [
+    'kernel/platform',
+    'kernel/user',
+]
+
+app_list = [
+    'src',
+    'third-party',
+    'test',  # 当前引用app test程序，用户可自由调整
+]
+
+kernel_mode = env.get('OC_ENTRY') == 'kernel'
+
+if kernel_mode:
+    plat_list.extend(app_list)
+    env['CCFLAGS'].append('-DNO_USERAPP')
+
+# step1:编译
+plat_objs = []
+for compnent in plat_list:
+    object = SConscript(os.path.join(compnent, 'SConscript'))
+    plat_objs.extend(object)
+
+# step2:根据export_list生成rsp文件，强制链接export接口
+if not kernel_mode:
+    mandatory_rsp, mandatory_obj = env.GenRsp([os.path.join(env['IMAGE_DIR'], 'mandatory_link.rsp'),
+    os.path.join(env['IMAGE_DIR'], 'mandatory_link.o')], env['EXPORT_SRC'])
+
+lib_rsp = env.GenLibRsp(env['LIB_RSP'], [])
+
+# step3:链接
+elf = env.Program(os.path.join(env['IMAGE_DIR'], env['CP_TARGET']), plat_objs)
+map = env.File(str(elf[0]).replace(".elf", ".map"))
+
+# step4:段拷贝
+ap_flash = env.FlashBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_flash'), elf)
+ap_psram = env.PsramBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_psram'), elf)
+ap_sysram = env.SysramBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_sysram'), elf)
+ap_asm = env.GenAsm(elf)
+
+# step5:打包
+ap_img = env.GenImg(os.path.join(env['IMAGE_DIR'], 'bin', 'ap'), [elf, ap_flash, ap_psram, ap_sysram])
+
+if not kernel_mode:
+    # step6:生成app需要的ld文件
+    ld_stub = env.GenLd(os.path.join(env['IMAGE_DIR'], 'import_func'), [elf, mandatory_obj])
+
+    # step7:安装生成的文件至userapp
+    stub_dir = os.path.join(root_dir, 'prebuild', 'ld')
+    bs_dir = os.path.join(root_dir, 'prebuild', 'baseline')
+    stub_ins = env.Install(stub_dir, ld_stub)
+    ap_ins = env.Install(bs_dir, ap_img)
+    bs_ins = env.Install(os.path.join(bs_dir, 'ap_elf'), [ap_asm, elf, map])
+
+    env.Depends(elf, mandatory_rsp)
+    env.NoClean([stub_ins, ap_ins, bs_ins])
+else:
+    pkg_dir = os.path.join(env['IMAGE_DIR'], 'pkg')
+    ap_dir = os.path.join(pkg_dir, 'ap_elf')
+    package_config = os.path.join(root_dir, 'kernel', 'prebuilts', 'single_mode', 'ld', 'config.json')
+
+    Mkdir(pkg_dir)
+    Mkdir(ap_dir)
+
+    def install_kernel_images(env, pkg_dir, root_dir, package_config):
+        files_to_install = {}
+
+        images_glob = Glob('tools/images/**/*')
+        images_root_files = Glob('tools/images/*')
+        all_images_files = images_root_files + images_glob
+        for image_file in all_images_files:
+            if os.path.isfile(str(image_file)):
+                rel_path = os.path.relpath(str(image_file), os.path.join(root_dir, 'tools', 'images'))
+                target_path = os.path.join(pkg_dir, rel_path)
+                files_to_install[target_path] = image_file
+
+        if os.path.isfile(package_config):
+            files_to_install[os.path.join(pkg_dir, 'config.json')] = env.File(package_config)
+
+        installed_files = []
+        for target_path, source_file in files_to_install.items():
+            target_dir = os.path.dirname(target_path)
+            Mkdir(target_dir)
+            installed_files.append(env.InstallAs(target_path, source_file))
+        return installed_files
+
+    installed_kernel_images = install_kernel_images(env, pkg_dir, root_dir, package_config)
+    installed_kernel_images.extend(env.Install(pkg_dir, ap_img))
+    installed_kernel_images.extend(env.Install(ap_dir, [elf, ap_asm, map]))
+
+    all_install_done = env.Alias('all_install_done_kernel', installed_kernel_images)
+    pack_script = os.path.join('tools', 'scripts', 'pack', 'main.py')
+    pack_imgx = os.path.join(env['IMAGE_DIR'], env['CP_TARGET'] + '.mimgx')
+    pack_target = env.Command(pack_imgx, [], '@python "%s" -m "%s" "%s"' % (pack_script, pkg_dir, pack_imgx))
+
+    env.Depends(pack_target, all_install_done)
+    env.Clean(elf, pkg_dir)
+    env.Clean(elf, pack_imgx)
+
+env.Requires(elf, lib_rsp)
+env.Clean(elf, map)  # 执行scons -c时删除与elf相关的附加文件
+env.Clean(elf, os.path.join(env['IMAGE_DIR'], 'bin'))

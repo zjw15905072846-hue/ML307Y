@@ -1,0 +1,269 @@
+{
+    "model": "XY4100L",
+    "configVersion": "3.0.0",
+    "internal": {
+        "Images": [
+            "ap_boot.img",
+            "ap.img",
+            "cp.img"
+        ],
+        "NVs": [
+            [
+                "factorynv.img",
+                "flashEreaseEnable"
+            ],
+            [
+                "psfacnv.img",
+                "flashEreaseEnable"
+            ],
+            [
+                "rfnv.img",
+                "flashEreaseEnable"
+            ],
+            [
+                "rfcalinv.img",
+                "flashEreaseEnable"
+            ]
+        ],
+        "imgs": [
+            [
+                "ap.img",
+                0,
+                0,
+                0,
+                0
+            ],
+            [
+                "cp.img",
+                1,
+                0,
+                0,
+                0
+            ],
+            [
+                "factorynv.img",
+                3,
+                0,
+                0,
+                0
+            ],
+            [
+                "psfacnv.img",
+                4,
+                0,
+                0,
+                0
+            ]
+        ],
+        "imgHeader": "0x60003000",
+        "check_version": "2",
+        "WriteSHA": false,
+        "Others": [
+            "loginfo.info",
+            "ap_loginfo.info",
+            "ap_elf.zip"
+        ],
+        "FLASH_BYTES_M": "2",
+        "RF_DEBUG_ADDR": "0x60002F00",
+        "PublicPemAddr": "0x60002000",
+        "FOTAPACKET": [
+            "0x601C0000",
+            "0x2C000"
+        ],
+        "Full_fota": {},
+        "secboot_upgrade_mode": "ignore",
+        "fota_pkt_check_mode": "sha",
+        "image_compress_algorithm": "lzma"
+    },
+    "memmap": {
+        "partitions": [
+            [
+                "ap_first_boot",
+                "0x60000000",
+                "0x1000",
+                1,
+                1
+            ],
+            [
+                "ap_first_boot_backup",
+                "0x60001000",
+                "0x1000",
+                0,
+                2
+            ],
+            [
+                "flash_header",
+                "0x60002000",
+                "0x1000",
+                1,
+                3
+            ],
+            [
+                "second_boot",
+                "0x60003000",
+                "0x1000",
+                1,
+                4
+            ],
+            [
+                "platform_org_nv",
+                "0x60004000",
+                "0x1000",
+                1,
+                5
+            ],
+            [
+                "ps_org_nv",
+                "0x60005000",
+                "0x1000",
+                1,
+                6
+            ],
+            [
+                "rf_cali_nv",
+                "0x60006000",
+                "0x2000",
+                2,
+                7
+            ],
+            [
+                "rfconfig_nv",
+                "0x60008000",
+                "0x1000",
+                1,
+                8
+            ],
+            [
+                "cp_code",
+                "0x6000B000",
+                "0xAE000",
+                1,
+                9
+            ],
+            [
+                "secboot_prime",
+                "0x600B9000",
+                "0x3000",
+                1,
+                10
+            ],
+            [
+                "fota_code",
+                "0x600BC000",
+                "0x25000",
+                1,
+                12
+            ],
+            [
+                "ap_code",
+                "0x600E1000",
+                "0xCB000",
+                1,
+                13
+            ],
+            [
+                "fs_region",
+                "0x601AC000",
+                "0x10000",
+                0,
+                -1
+            ],
+            [
+                "user_flash",
+                "0x601BC000",
+                "0x4000",
+                1,
+                0
+            ],
+            [
+                "fota_packet",
+                "0x601C0000",
+                "0x2C000",
+                0,
+                16
+            ],
+            [
+                "platform_working_nv",
+                "0x601EC000",
+                "0x1000",
+                1,
+                5
+            ],
+            [
+                "ps_working_nv",
+                "0x601ED000",
+                "0x1000",
+                1,
+                6
+            ],
+            [
+                "plat_invar",
+                "0x601EE000",
+                "0x1000",
+                0,
+                17
+            ],
+            [
+                "ps_sleep_nv",
+                "0x601EF000",
+                "0x4000",
+                0,
+                18
+            ],
+            [
+                "phy_working_nv",
+                "0x601F3000",
+                "0x1000",
+                0,
+                19
+            ],
+            [
+                "rc32_nv",
+                "0x601F4000",
+                "0x1000",
+                0,
+                20
+            ],
+            [
+                "fota_backup_padding",
+                "0x601F5000",
+                "0xB000",
+                0,
+                21
+            ]
+        ]
+    },
+    "Comments": {
+        "客户关注": [
+            "没有列在这里的项目不要随意修改",
+            "文件系统为'memmap-partitions-userflash'分区, 格式参考'partitions'"
+        ],
+        "Common": [
+            "model: 芯翼产品名称",
+            "configVersion: config.json版本号",
+            "Images/NVs: 下载/打包的img文件及NV文件",
+            "imgs: 需要生成校验码的img",
+            "imgHeader: 安全启动信息的地址",
+            "WriteSHA: 是否写入SHA",
+            "check_version: 安全启动信息版本",
+            "Others: loginfo文件",
+            "FLASH_BYTES_M: flash类型",
+            "RF_DEBUG_ADDR: 下载时间的写入或查询地址",
+            "memmap:分区表"
+        ],
+        "imgs": [
+            "img文件名(例:'ap_boot.img')",
+            "img序列号(所有img序列号不能相同)",
+            "校验码类型(0:sha+rsa, 1:sha)",
+            "生成校验码的抽样策略,没有特殊需求配置为0",
+            "是否校验该img的开关(0代表关闭,1代表开启)"
+        ],
+        "partitions": [
+            "分区名(例:'ap_first_boot')",
+            "起始地址(例:'0x60000000')",
+            "分区长度(例:'0x3000')",
+            "擦除标致位('0'一定会擦;'1'有文件时会擦除,没有文件不擦除)",
+            "分区ID(ID一致时,有一个分区需要擦除,其他的相同ID的分区也会擦除)"
+        ]
+    }
+}
