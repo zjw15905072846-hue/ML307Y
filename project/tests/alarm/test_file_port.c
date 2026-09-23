@@ -1,8 +1,8 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "test_support.h"
-#include "../../platform/ml307y/kernel/base_bridge.c"
-#include "../../platform/ml307y/storage/file_port.c"
-#include "alarm_core.h"
+#include "../../src/ml307y/base_bridge.c"
+#include "../../src/ml307y/file_port.c"
+#include "alarm_button/alarm_core.h"
 /*-------------------------------------------define---------------------------------------------*/
 /*-------------------------------------------typedef---------------------------------------------*/
 /*-------------------------------------------variables-------------------------------------------*/

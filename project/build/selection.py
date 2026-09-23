@@ -5,24 +5,17 @@ import json
 import re
 
 MODULES = {
-    "key": ["common/services/key/key.c"],
-    "indicator": ["common/services/indicator/indicator.c"],
-    "reporting": ["common/services/reporting/alarm_core.c"],
-    "kaiwan": ["common/protocols/kaiwan/codec/kw_protocol.c",
-               "common/protocols/kaiwan/session/kw_session.c",
-               "common/protocols/kaiwan/devices/handset_payload.c"],
-    "mqtt": ["common/transport/mqtt/mqtt_config.c",
-             "common/transport/mqtt/mqtt_rx.c", "platform/ml307y/network/mqtt_port.c"],
-    "storage": ["common/services/reporting/snapshot_store.c",
-                "platform/ml307y/storage/file_port.c"],
+    "key": ["src/key.c"],
+    "indicator": ["src/indicator.c"],
+    "reporting": ["src/alarm_button/alarm_core.c"],
+    "kaiwan": ["src/kaiwan/kw_protocol.c", "src/kaiwan/kw_session.c"],
+    "mqtt": ["src/mqtt/mqtt_config.c", "src/mqtt/mqtt_rx.c", "src/ml307y/mqtt_port.c"],
+    "storage": ["src/snapshot_store.c", "src/ml307y/file_port.c"],
 }
-PLATFORM_SOURCES = ["project/platform/ml307y/os/system_port.c",
-                    "project/platform/ml307y/startup/product_start.c"]
-INCLUDES = ["project/common/interfaces", "project/common/services/key",
-            "project/common/services/indicator", "project/common/services/reporting",
-            "project/common/services/battery", "project/common/transport/mqtt",
-            "project/common/protocols/kaiwan/codec", "project/common/protocols/kaiwan/session",
-            "project/common/protocols/kaiwan/devices", "project/platform/ml307y",
+PLATFORM_SOURCES = ["project/src/ml307y/diag_uart.c",
+                    "project/src/ml307y/system_port.c",
+                    "project/src/ml307y/product_start.c"]
+INCLUDES = ["project/inc",
             "include/platform/ssl/mbedtls-3.6.4/include"]
 
 def select(root, arguments):
@@ -92,8 +85,7 @@ def select(root, arguments):
             raise ValueError("Source escapes project")
     product["sources"] = sources
     product["resources"] = resources
-    product["include_dirs"] = INCLUDES + ["project/products/" + name,
-        "project/boards/" + product["board"]]
+    product["include_dirs"] = INCLUDES
     return product
 
 def base_fingerprint(root):
@@ -101,10 +93,10 @@ def base_fingerprint(root):
     inputs = sorted((root / "kernel/prebuilts/open_mode/libs").glob("*.a"))
     inputs += sorted((root / "kernel/prebuilts/open_mode/ld").glob("*"))
     inputs += [root / "kernel/export/open_mode/xy_export.list",
-               root / "project/platform/ml307y/kernel/base_bridge.c",
-               root / "project/platform/ml307y/kernel/extra_exports.list",
+               root / "project/src/ml307y/base_bridge.c",
+               root / "project/src/ml307y/extra_exports.list",
                root / "project/build/selection.py", root / "project/build/artifacts.py",
-               root / "project/platform/ml307y/kernel/SConscript", root / "SConscript-k", root / "SConstruct",
+               root / "project/src/ml307y/SConscript", root / "SConscript-k", root / "SConstruct",
                root / "tools/scons/KernelTools.py", root / "tools/scons/EnvironConfig.py",
                root / "kernel/platform/memmap/src/memmap_open.c"]
     digest = hashlib.sha256()
@@ -175,7 +167,7 @@ def apply(env, root, arguments):
         env["EXPORT_SRC"] = str(generated / "project_export.list")
         if not GetOption("no_exec") and not GetOption("clean"):
             exports = (root / "kernel/export/open_mode/xy_export.list").read_text(encoding="utf-8")
-            exports += "\n" + (root / "project/platform/ml307y/kernel/extra_exports.list").read_text(encoding="utf-8")
+            exports += "\n" + (root / "project/src/ml307y/extra_exports.list").read_text(encoding="utf-8")
             (generated / "project_export.list").write_text(exports,encoding="utf-8")
     else:
         if not GetOption("no_exec") and not GetOption("clean") and not (base / "ld/import_func.ld").exists():

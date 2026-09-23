@@ -1,4 +1,4 @@
 {
-  "alarm_button": "project/products/alarm_button/manifest.json",
-  "template_test": "project/template/manifest.json"
+  "alarm_button": "project/build/manifests/alarm_button.json",
+  "template_test": "project/build/manifests/template_test.json"
 }

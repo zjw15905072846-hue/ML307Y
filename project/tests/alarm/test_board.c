@@ -1,6 +1,6 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "board.h"
-#include "alarm_core.h"
+#include "alarm_button/alarm_core.h"
 #include <assert.h>
 #include <stdio.h>
 /*-------------------------------------------define---------------------------------------------*/

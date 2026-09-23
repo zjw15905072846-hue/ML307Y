@@ -15,26 +15,28 @@ def create_product(root, name, product_id):
     registry_file = root / "project/build/products.json"
     original = registry_file.read_text(encoding="utf-8")
     registry = json.loads(original)
-    destination = root / "project/products" / name
-    if name in registry or destination.exists():
+    destination = root / "project/src" / (name + ".c")
+    manifest = root / "project/build/manifests" / (name + ".json")
+    if name in registry or destination.exists() or manifest.exists():
         raise ValueError("Product already exists; no files changed")
     for path in registry.values():
         spec = json.loads((root / path).read_text(encoding="utf-8"))
         if spec["id"] == product_id or spec["storage_namespace"] == name:
             raise ValueError("Product/storage identity already used")
-    spec = json.loads((root / "project/template/manifest.json").read_text(encoding="utf-8"))
+    spec = json.loads((root / "project/build/manifests/template_test.json").read_text(encoding="utf-8"))
+    shared_resources = [item for item in spec["resources"] if not item.startswith("STORE:")]
     spec.update(name=name, id=product_id, storage_namespace=name,
                 entry=name + "_product_start", board_prepare=name + "_board_prepare",
-                sources=["project/products/" + name + "/product_main.c"],
-                resources=["STORE:" + name])
-    source = (root / "project/template/product_main.c").read_text(encoding="utf-8")
+                 sources=["project/src/" + name + ".c"],
+                 resources=["STORE:" + name] + shared_resources)
+    source = (root / "project/src/product_main.c").read_text(encoding="utf-8")
     source = source.replace("template_product_start", spec["entry"])
     source = source.replace("template_board_prepare", spec["board_prepare"])
     source = source.replace("template-test-started", name + "-test-started")
-    destination.mkdir(parents=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     # First batch: the new source and manifest (2 files).
-    (destination / "product_main.c").write_text(source, encoding="utf-8")
-    manifest = destination / "manifest.json"
+    destination.write_text(source, encoding="utf-8")
     manifest.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # Second batch: register only after both files exist; never erase partial work on failure.
     if registry_file.read_text(encoding="utf-8") != original:

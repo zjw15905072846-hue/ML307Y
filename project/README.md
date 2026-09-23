@@ -4,33 +4,26 @@
 
 ```text
 project/
-├─ common/
-│  ├─ interfaces/               硬件、系统、存储和产品描述表
-│  ├─ services/
-│  │  ├─ key/                  30 ms 消抖与按下、释放边沿
-│  │  ├─ indicator/            可配置声光序列
-│  │  ├─ reporting/            持久队列、双快照、重试和事件确认
-│  │  └─ battery/              电池电压接口
-│  ├─ transport/mqtt/          传输接口、配置校验、分段组包
-│  └─ protocols/kaiwan/        编解码、会话校验、手报数据体
-├─ boards/alarm_board_v1/       原理图物理脚、有效电平和板能力
-├─ products/alarm_button/       本轮报警规则、前后台任务及私有参数
-├─ platform/ml307y/
-│  ├─ hal/                     CM GPIO、IOMUX、PWM、VBAT 适配
-│  ├─ os/                      任务、队列、时间、工作锁适配
-│  ├─ network/                 CM 异步 MQTT
-│  ├─ storage/                 LittleFS 文件适配
-│  ├─ kernel/                  项目底包扩展及导出符号
-│  └─ startup/                 唯一 cm_opencpu_entry 与产品描述表
-├─ build/                      产品注册表、显式组件清单、配套校验
-├─ template/                   虚拟板产品模板
+├─ inc/                        全项目共用头文件目录
+│  ├─ key.h、indicator.h 等     单文件功能和公共接口直接放此处
+│  ├─ alarm_button/            报警功能的多个头文件
+│  ├─ kaiwan/                  铠湾协议的多个头文件
+│  ├─ mqtt/                    MQTT 传输的多个头文件
+│  └─ ml307y/                  ML307Y 平台接口与配置
+├─ src/                        全项目共用源码目录
+│  ├─ key.c、indicator.c 等     单文件功能直接放此处
+│  ├─ alarm_button/            报警业务、队列和手报数据体
+│  ├─ kaiwan/                  铠湾协议编解码与会话
+│  ├─ mqtt/                    传输配置与接收组包
+│  └─ ml307y/                  CM 适配、启动和底包扩展
+├─ build/                      产品注册表、清单和配套校验
 ├─ tests/                      主机与构建隔离回归
 ├─ tools/                      新产品创建、构建和验收入口
 ├─ docs/                       扩展说明、硬件边界与验收记录
 └─ SConscript
 ```
 
-功耗接口暂集中在 system_if.h，产品决定休眠条件，ML307Y 适配负责工作锁；不为了凑目录创建空实现。板级电池入口使用内部 VBAT，不占用接 LED 的 ADC1。
+只有同一功能有多个文件时才创建对应子目录，不为单文件功能创建空目录。构建清单显式选择源码，因此两个产品仍保持隔离。功耗接口暂集中在 system_if.h，产品决定休眠条件，ML307Y 适配负责工作锁；板级电池入口使用内部 VBAT，不占用接 LED 的 ADC1。
 
 ## 构建
 

@@ -1,6 +1,6 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "snapshot_store.h"
-#include "alarm_core.h"
+#include "alarm_button/alarm_core.h"
 #include "test_support.h"
 /*-------------------------------------------define---------------------------------------------*/
 #define PRODUCT 0x41420101U

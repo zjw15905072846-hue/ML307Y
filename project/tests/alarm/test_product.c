@@ -1,5 +1,5 @@
 /*------------------------------------------includes--------------------------------------------*/
-#include "alarm_button.h"
+#include "alarm_button/alarm_button.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

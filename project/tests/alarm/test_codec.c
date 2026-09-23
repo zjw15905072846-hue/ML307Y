@@ -1,6 +1,6 @@
 /*------------------------------------------includes--------------------------------------------*/
-#include "handset_payload.h"
-#include "kw_protocol.h"
+#include "alarm_button/handset_payload.h"
+#include "kaiwan/kw_protocol.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

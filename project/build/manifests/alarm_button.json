@@ -1,0 +1,42 @@
+{
+  "name": "alarm_button",
+  "id": 1094844673,
+  "board": "alarm_board_v1",
+  "platform": "ml307y",
+  "storage_namespace": "alarm_button",
+  "entry": "alarm_product_start",
+  "test_only": false,
+  "modules": [
+    "key",
+    "indicator",
+    "reporting",
+    "kaiwan",
+    "mqtt",
+    "storage"
+  ],
+  "sources": [
+    "project/src/alarm_button/alarm_button.c",
+    "project/src/alarm_button/alarm_runtime.c",
+    "project/src/alarm_button/handset_payload.c",
+    "project/src/board.c",
+    "project/src/ml307y/alarm_hal.c"
+  ],
+  "resources": [
+    "PIN:26",
+    "PIN:96",
+    "PIN:74",
+    "PWM:0",
+    "UART:0",
+    "PIN:17",
+    "PIN:18",
+    "STORE:alarm_button"
+  ],
+  "pinmap_verified": false,
+  "wake_verified": false,
+  "key_sdk_pin": -1,
+  "led_sdk_pin": -1,
+  "buzzer_sdk_pin": 16,
+  "buzzer_kind": "unverified",
+  "buzzer_hz": 0,
+  "board_prepare": "alarm_board_prepare"
+}

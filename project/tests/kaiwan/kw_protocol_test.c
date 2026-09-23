@@ -1,6 +1,6 @@
 /* 铠湾协议纯软件回归测试，不自动访问网络或Flash。 */
 /*------------------------------------------includes--------------------------------------------*/
-#include "kw_protocol.h"
+#include "kaiwan/kw_protocol.h"
 
 #include <string.h>
 

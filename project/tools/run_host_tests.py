@@ -19,29 +19,28 @@ def main():
     out = ROOT / "out/host-tests"
     out.mkdir(parents=True, exist_ok=True)
     includes = [p for p in INCLUDES if not p.startswith("include/")]
-    includes += ["project/boards/alarm_board_v1", "project/products/alarm_button",
-                 "project/tests", "project/tests/alarm", "include/platform",
+    includes += ["project/tests", "project/tests/alarm", "include/platform",
                  "project/tests/vendor/cJSON", "project/tests/vendor/mbedtls-3.2.1/include",
                  "project/tests/vendor/mbedtls-3.2.1/library"]
-    core = ["project/common/services/reporting/alarm_core.c",
-            "project/common/services/key/key.c", "project/common/services/indicator/indicator.c"]
-    app = core + ["project/products/alarm_button/alarm_button.c"]
-    payload = ["project/common/protocols/kaiwan/devices/handset_payload.c"]
-    crypto = ["project/common/protocols/kaiwan/session/kw_session.c",
-              "project/common/protocols/kaiwan/codec/kw_protocol.c",
+    core = ["project/src/alarm_button/alarm_core.c",
+            "project/src/key.c", "project/src/indicator.c"]
+    app = core + ["project/src/alarm_button/alarm_button.c"]
+    payload = ["project/src/alarm_button/handset_payload.c"]
+    crypto = ["project/src/kaiwan/kw_session.c",
+              "project/src/kaiwan/kw_protocol.c",
               "project/tests/vendor/cJSON/cJSON.c", "project/tests/kaiwan/kw_protocol_test.c"]
     crypto += ["project/tests/vendor/mbedtls-3.2.1/library/" + f
                for f in ("aes.c", "platform_util.c", "platform.c")]
     suites = {"test_alarm_core": core, "test_product": app, "test_async_product": app,
-              "test_payload": payload, "test_board": ["project/boards/alarm_board_v1/board.c"],
+              "test_payload": payload, "test_board": ["project/src/board.c"],
               "test_codec": payload + crypto,
-              "test_snapshot": core + ["project/common/services/reporting/snapshot_store.c"],
-              "test_mqtt_rx": ["project/common/transport/mqtt/mqtt_rx.c"]}
+              "test_snapshot": core + ["project/src/snapshot_store.c"],
+              "test_mqtt_rx": ["project/src/mqtt/mqtt_rx.c"]}
     optional = {
-        "test_runtime": app + payload + crypto + ["project/common/transport/mqtt/mqtt_config.c"],
-        "test_file_port": core + ["project/common/services/reporting/snapshot_store.c"],
-        "test_mqtt_port": ["project/common/transport/mqtt/mqtt_config.c", "project/common/transport/mqtt/mqtt_rx.c"],
-        "test_hal": ["project/boards/alarm_board_v1/board.c"],
+        "test_runtime": app + payload + crypto + ["project/src/mqtt/mqtt_config.c"],
+        "test_file_port": core + ["project/src/snapshot_store.c"],
+        "test_mqtt_port": ["project/src/mqtt/mqtt_config.c", "project/src/mqtt/mqtt_rx.c"],
+        "test_hal": ["project/src/board.c"],
     }
     for name, sources in optional.items():
         if (ROOT / "project/tests/alarm" / (name + ".c")).exists():

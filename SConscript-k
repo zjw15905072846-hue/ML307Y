@@ -29,7 +29,7 @@ app_list = [
 ]
 
 if env.get('PROJECT_MODE'):
-    plat_list.append('project/platform/ml307y/kernel')
+    plat_list.append('project/src/ml307y')
 
 kernel_mode = env.get('OC_ENTRY') == 'kernel'
 

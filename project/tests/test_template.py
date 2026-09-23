@@ -16,8 +16,8 @@ class TemplateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / "out", prefix="template-test-")
         self.root = Path(self.temp.name)
-        for relative in ("project/build/products.json", "project/products/alarm_button/manifest.json",
-                         "project/template/manifest.json", "project/template/product_main.c"):
+        for relative in ("project/build/products.json", "project/build/manifests/alarm_button.json",
+                         "project/build/manifests/template_test.json", "project/src/product_main.c"):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
@@ -26,12 +26,12 @@ class TemplateTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_new_product_has_distinct_binding_and_namespace(self):
-        folder = create_product(self.root, "desk_caller", 0x44430101)
+        source_path = create_product(self.root, "desk_caller", 0x44430101)
         spec = select(self.root, {"product": "desk_caller"})
         self.assertEqual(spec["entry"], "desk_caller_product_start")
         self.assertTrue(spec["test_only"])
         self.assertEqual(spec["storage_namespace"], "desk_caller")
-        source = (folder / "product_main.c").read_text(encoding="utf-8")
+        source = source_path.read_text(encoding="utf-8")
         self.assertIn("desk_caller_product_start", source)
         self.assertNotIn("template_product_start", source)
         self.assertFalse(any("alarm_button" in p for p in spec["sources"]))
@@ -43,7 +43,8 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(name=name, identity=identity), self.assertRaises(ValueError):
                 create_product(self.root, name, identity)
         self.assertEqual((self.root / "project/build/products.json").read_bytes(), original)
-        self.assertFalse((self.root / "project/products/desk_caller").exists())
+        self.assertFalse((self.root / "project/src/desk_caller.c").exists())
+        self.assertFalse((self.root / "project/build/manifests/desk_caller.json").exists())
 
 if __name__ == "__main__":
     unittest.main()

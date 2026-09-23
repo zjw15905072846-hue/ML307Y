@@ -17,8 +17,8 @@ class ProductSelectionTests(unittest.TestCase):
         (ROOT / "out").mkdir(exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / "out", prefix="selection-test-")
         self.root = Path(self.temp.name)
-        for relative in ("project/build/products.json", "project/products/alarm_button/manifest.json",
-                         "project/template/manifest.json"):
+        for relative in ("project/build/products.json", "project/build/manifests/alarm_button.json",
+                         "project/build/manifests/template_test.json"):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
@@ -27,7 +27,7 @@ class ProductSelectionTests(unittest.TestCase):
         self.temp.cleanup()
 
     def alarm_change(self, **changes):
-        path = self.root / "project/products/alarm_button/manifest.json"
+        path = self.root / "project/build/manifests/alarm_button.json"
         spec = json.loads(path.read_text())
         spec.update(changes)
         path.write_text(json.dumps(spec))
@@ -35,13 +35,30 @@ class ProductSelectionTests(unittest.TestCase):
     def test_only_selected_sources_and_entry(self):
         alarm = select(self.root, {"product": "alarm_button"})
         template = select(self.root, {"product": "template_test"})
-        self.assertIn("project/products/alarm_button/alarm_runtime.c", alarm["sources"])
+        self.assertIn("project/src/alarm_button/alarm_runtime.c", alarm["sources"])
         self.assertFalse(any("alarm_" in path for path in template["sources"]))
         self.assertNotEqual(alarm["entry"], template["entry"])
         self.assertNotEqual(alarm["storage_namespace"], template["storage_namespace"])
         for spec in (alarm, template):
             self.assertFalse(any("access_control" in path or "custom/" in path or "test/" in path
-                                 for path in spec["sources"]))
+                                for path in spec["sources"]))
+
+    def test_uart0_diagnostic_is_built_and_prints_before_boot_checks(self):
+        for product in ("alarm_button", "template_test"):
+            spec = select(self.root, {"product": product})
+            sources = spec["sources"]
+            self.assertIn("project/src/ml307y/diag_uart.c", sources)
+            for resource in ("UART:0", "PIN:17", "PIN:18"):
+                self.assertIn(resource, spec["resources"])
+        startup = (ROOT / "project/src/ml307y/product_start.c").read_text(encoding="utf-8")
+        boot = startup.split("static void product_boot_task(void *argument)", 1)[1]
+        boot = boot.split("int cm_opencpu_entry(void *param)", 1)[0]
+        init = boot.find("ml_uart_diag_init()")
+        ready = boot.find("UART0 ready")
+        base_check = boot.find("project_base_identity()")
+        self.assertGreaterEqual(init, 0)
+        self.assertGreater(ready, init)
+        self.assertGreater(base_check, ready)
 
     def test_vendor_entries_and_wrong_targets_rejected(self):
         for args in ({"demo": "mqtt"}, {"test": "y"}, {"xydemo": "y"}, {"oc_entry": "kernel"},
