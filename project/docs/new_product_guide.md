@@ -1,0 +1,97 @@
+# 新增产品示例
+
+一次构建选择一个产品、一块板和一个平台。不要复制整套 SDK，也不要在 common 中加入不断增长的产品型号判断。
+
+## 从虚拟模板创建桌面呼叫器
+
+在 SDK 根目录执行下面命令；desk_caller 是说明中的示例，本轮没有把它注册为第三个实际产品。
+
+```powershell
+python project/tools/new_product.py desk_caller --id 0x44430101
+python project/tools/build_product.py desk_caller
+```
+
+工具先检查名称、产品 ID、存储命名空间和目录是否重复，再生成两份文件，最后单独登记清单；不覆盖已有产品。生成后的清单核心内容：
+
+```json
+{
+  "name": "desk_caller",
+  "id": 1145241857,
+  "board": "virtual",
+  "platform": "ml307y",
+  "storage_namespace": "desk_caller",
+  "entry": "desk_caller_product_start",
+  "board_prepare": "desk_caller_board_prepare",
+  "test_only": true,
+  "modules": [],
+  "sources": ["project/products/desk_caller/product_main.c"],
+  "resources": ["STORE:desk_caller"]
+}
+```
+
+先编译这个虚拟产品，确认独立 ELF、配置和输出目录，再接入实际业务。初始模板只记录启动消息；test_only 为 true 是用途标记，并不自动模拟硬件。
+
+## 决定修改哪一层
+
+| 变化 | 修改位置 | 约束 |
+|---|---|---|
+| 同一块板，新增业务 | products/<产品>/ | 独立规则、入口、时间参数和协议身份 |
+| 业务相同，接线或外设改变 | boards/<板>/ 与对应平台 HAL 绑定 | 物理脚、有效电平、复用、唤醒依据写清 |
+| 更换芯片或 OpenCPU SDK | platform/<平台>/ 与构建平台表 | 对齐公共接口；不得沿用另一 SDK 的数字引脚编号 |
+| 两个产品确实共用的能力 | common/ | 接受上下文与参数，不引用产品头文件，不直接调用 CM 接口 |
+| 不同云平台或设备报文 | common/protocols/<协议>/devices/ | 产品选择身份；设备类型、心跳周期不写成全产品默认值 |
+
+当前选择器仅实现 ML307Y-DL；更换平台需要补齐适配和选择器校验，并非改一个名称即可运行。
+
+## 把模板变成实际产品
+
+```text
+明确产品需求
+├─ 选择硬件板
+│  ├─ 已有板且接线一致 → 复用板源码与 prepare_board 入口
+│  └─ 新板或接线不同 → 建立新板定义及平台 HAL 绑定
+├─ 选择共用组件
+│  ├─ 按键 → key；只处理边沿，长按等规则在产品层
+│  ├─ 声光 → indicator；产品传入自己的时序
+│  ├─ 铠湾 → kaiwan + mqtt；选对应 devices 编码器
+│  └─ 持久队列 → reporting + storage；先确认该事件格式适合此产品
+├─ 填写产品配置
+│  ├─ 唯一 ID、命名空间、入口、板和平台
+│  ├─ 显式源文件与 GPIO/PWM/定时器等资源声明
+│  └─ 自己的协议身份、超时、周期和待机策略
+├─ 实现业务
+│  ├─ prepare_board 成功 → 通过 product_services_t 获得服务
+│  ├─ 前台处理输入及提示 → 消息投递给后台
+│  ├─ 后台保存成功 → 允许发送
+│  └─ 对应业务确认且删除成功 → 完成该事件
+└─ 验收
+   ├─ 主机时序与故障注入
+   ├─ 独立交叉编译、打包和符号检查
+   └─ 板级、平台业务闭环、掉电和功耗测量
+```
+
+1. 在新产品目录增加 product_config.h 和业务文件，参数通过上下文传给公共模块。不要改报警产品的 1／3／30 秒配置来适配另一个产品。
+2. 更新该产品 manifest.json 的 modules、sources、board_prepare 与 resources。所有被选择的自研源文件必须位于 project 内；禁止递归搜集所有产品。
+3. 同板复用时在新清单列出所需板源码及 HAL，绑定已存在的板入口。板的核验保护继续生效，不能通过改产品名字绕过。
+4. 声光输出由一个前台入口拥有；后台只发事件，不同时写 LED/PWM。持久队列、协议工作区和传输连接由各自上下文拥有。
+5. 创建该产品的 tests 用例后执行构建工具，检查与 alarm_button 切换后的源码、符号、存储命名空间和固件名。
+
+资源名统一为 PIN:<物理脚>、PWM:<通道>、TIMER:<编号>、RTC:<编号>、UART/I2C/SPI:<编号>、STORE:<命名空间>。同一次构建重复声明会被拒绝；不同产品不同时运行，因此可以选择同一块板。需要同时运行多个业务时，把它们设计为同一产品内的组件，并重新规划资源和调度，不能同时开启两个产品入口。
+
+## 存储和协议扩展
+
+当前报警队列保留原产品格式版本 2 与身份 0x41420101，外层双快照格式版本 1。另一产品应获得独立命名空间和 ID。事件结构不同则建立自身事件格式与版本，不强行复用 al_event_t；可以继续复用 storage_if_t、文件适配和 snapshot_store。
+
+snapshot_store 支持的当前有效载荷上限为 2048 字节；改变结构前检查容量和版本。未知版本、外来产品或读取错误必须停止写入并报告，不能恢复默认后覆盖数据。旧门禁以后迁入时也应走独立产品和命名空间，本轮不搬旧 Flash 的前后 8 KiB 布局。
+
+铠湾手报类型 0x04、紧急事件 0x0C 和 22 小时业务心跳属于 alarm_button。新增其他设备类型应编写对应 devices 编码器并配置自己的周期。通用 MQTT 当前 CM 适配只支持 QoS 1、单个下行订阅与一个在途发布；扩展其他模式时先添加异步和异常测试。
+
+## 本地平台参数
+
+报警使用 product 私有头文件覆盖 provisioning.h 的默认值。把文件放在 project/private/（已经加入忽略规则），然后：
+
+```powershell
+python project/tools/build_product.py alarm_button --provision project/private/alarm_lab.h
+```
+
+头文件可配置 Broker、账户、AES 密钥、32 字节厂商码、厂商 ID、协议确认标志、未知遥测编码、历史补报方式及 TLS 证书配置。不要把凭据写入公共接口、测试或构建日志。先通过平台样例确认，不能照抄虚构测试值上线。

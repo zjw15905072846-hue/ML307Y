@@ -1,0 +1,28 @@
+# SCons build outputs
+/out/
+/.sconsign.dblite
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Compiler intermediate files
+*.o
+*.obj
+*.d
+
+# IDE and editor files
+/.vscode/
+/.idea/
+*.user
+*.suo
+*.swp
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Per-product local credentials
+/project/private/

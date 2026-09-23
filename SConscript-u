@@ -27,7 +27,9 @@ compnent_list = [
     'third-party',
 ]
 
-if env['DEMO_SUPPORT'].lower() != 'n':  # 编译demo
+if env.get('PROJECT_MODE'):
+    compnent_list.append('project')
+elif env['DEMO_SUPPORT'].lower() != 'n':  # 编译demo
     compnent_list.append('examples')
     demo_support = env['DEMO_SUPPORT'].lower()
     Export('demo_support')
@@ -63,6 +65,9 @@ for lib in lib_files:
 elf = env.Program(os.path.join(
     env['IMAGE_DIR'], env['TARGET_NAME']), objects, LIBS=libs)
 map = env.File(str(elf[0]).replace(".elf", ".map"))
+# Linker produces MAP as a side effect; installation must wait for ELF.
+env.SideEffect(map, elf)
+
 app_flash_bin_origin = env.Binary(os.path.join(
     env['IMAGE_ORIGIN_DIR'], 'app_flash.bin'), elf, SECTIONS=[
         '.image_header', '.flash.text', '.flash.rodata'])
@@ -102,13 +107,14 @@ def install_images_with_priority(env, pkg_dir, root_dir):
             files_to_install[target_path] = image_file
     
     # 后处理prebuild/baseline目录的文件（较高优先级），覆盖同名文件
-    bs_glob = Glob('prebuild/baseline/**/*')
-    bs_root_files = Glob('prebuild/baseline/*')
+    baseline_root = env.get('PROJECT_BASELINE_DIR', os.path.join(root_dir, 'prebuild', 'baseline'))
+    bs_glob = Glob(os.path.join(baseline_root, '**', '*'))
+    bs_root_files = Glob(os.path.join(baseline_root, '*'))
     all_bs_files = bs_root_files + bs_glob
     for bs_file in all_bs_files:
         # 检查是否为文件而不是目录
         if os.path.isfile(str(bs_file)):
-            rel_path = os.path.relpath(str(bs_file), os.path.join(root_dir, 'prebuild', 'baseline'))
+            rel_path = os.path.relpath(str(bs_file), baseline_root)
             target_path = os.path.join(pkg_dir, rel_path)
             files_to_install[target_path] = bs_file  # 高优先级文件覆盖低优先级文件
     
@@ -137,7 +143,7 @@ pack_target = env.Command(pack_imgx, [], '@python "%s" -m "%s" "%s"' % (pack_scr
 
 
 # Ensure linking is re-run when the external linker script `import_func.ld` is updated
-import_func_ld = os.path.join(root_dir, 'prebuild', 'ld', 'import_func.ld')
+import_func_ld = os.path.join(env.get('PROJECT_LD_DIR', os.path.join(root_dir, 'prebuild', 'ld')), 'import_func.ld')
 # Use Depends so SCons will rebuild `elf` when the linker script timestamp/content changes
 env.Depends(elf, env.File(import_func_ld))
 env.Depends(app_flash_bin_origin, elf)

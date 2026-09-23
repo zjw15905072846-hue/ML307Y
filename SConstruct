@@ -80,6 +80,12 @@ elif env['BUILD_TARGET'] == 'obm':
     install_obm_tools(env)
 
 
+# Optional project-owned product configuration; vendor invocations remain unchanged.
+if ARGUMENTS.get('product'):
+    sys.path.insert(0, os.path.join(root_dir, 'project', 'build'))
+    from selection import apply as apply_product
+    apply_product(env, root_dir, ARGUMENTS)
+
 Export('env', 'root_dir')
 SConscript(scons_file, variant_dir=env['OBJECT_DIR'], duplicate=0)
 

@@ -28,6 +28,9 @@ app_list = [
     'test',  # 当前引用app test程序，用户可自由调整
 ]
 
+if env.get('PROJECT_MODE'):
+    plat_list.append('project/platform/ml307y/kernel')
+
 kernel_mode = env.get('OC_ENTRY') == 'kernel'
 
 if kernel_mode:
@@ -50,6 +53,9 @@ lib_rsp = env.GenLibRsp(env['LIB_RSP'], [])
 # step3:链接
 elf = env.Program(os.path.join(env['IMAGE_DIR'], env['CP_TARGET']), plat_objs)
 map = env.File(str(elf[0]).replace(".elf", ".map"))
+# Linker produces MAP as a side effect; installation must wait for ELF.
+env.SideEffect(map, elf)
+
 
 # step4:段拷贝
 ap_flash = env.FlashBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_flash'), elf)
@@ -65,13 +71,14 @@ if not kernel_mode:
     ld_stub = env.GenLd(os.path.join(env['IMAGE_DIR'], 'import_func'), [elf, mandatory_obj])
 
     # step7:安装生成的文件至userapp
-    stub_dir = os.path.join(root_dir, 'prebuild', 'ld')
-    bs_dir = os.path.join(root_dir, 'prebuild', 'baseline')
+    stub_dir = env.get('PROJECT_LD_DIR', os.path.join(root_dir, 'prebuild', 'ld'))
+    bs_dir = env.get('PROJECT_BASELINE_DIR', os.path.join(root_dir, 'prebuild', 'baseline'))
     stub_ins = env.Install(stub_dir, ld_stub)
     ap_ins = env.Install(bs_dir, ap_img)
     bs_ins = env.Install(os.path.join(bs_dir, 'ap_elf'), [ap_asm, elf, map])
 
     env.Depends(elf, mandatory_rsp)
+    env.Depends(elf, lib_rsp)
     env.NoClean([stub_ins, ap_ins, bs_ins])
 else:
     pkg_dir = os.path.join(env['IMAGE_DIR'], 'pkg')

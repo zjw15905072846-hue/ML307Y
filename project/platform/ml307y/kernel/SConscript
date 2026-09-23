@@ -1,0 +1,6 @@
+Import('env', 'root_dir')
+from ModuleBuild import ModuleBuild
+mod = ModuleBuild(env, name="project_base", ram_srcs=["base_bridge.c"],
+                  flash_srcs=[], pub_incs=[], pri_incs=[], cpp_define=[])
+objects = mod.build_object()
+Return('objects')

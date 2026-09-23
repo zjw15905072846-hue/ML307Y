@@ -1,0 +1,17 @@
+Import('env', 'root_dir')
+from ModuleBuild import ModuleBuild
+from pathlib import Path
+
+spec = env["PROJECT_SPEC"]
+sources = [path.removeprefix("project/") for path in spec["sources"]]
+for path in spec["sources"]:
+    if not (Path(root_dir) / path).is_file():
+        raise ValueError("Missing product source: " + path)
+includes = ["#" + path for path in spec["include_dirs"]]
+mod = ModuleBuild(env, name="product_" + spec["name"], ram_srcs=sources, flash_srcs=[],
+                  pub_incs=[], pri_incs=includes,
+                  cpp_define=[("MBEDTLS_CONFIG_FILE",'<project_crypto_config.h>')])
+objects = mod.build_object()
+if env.get("PROJECT_PROVISION"):
+    env.Depends(objects, env.File(env["PROJECT_PROVISION"]))
+Return('objects')
