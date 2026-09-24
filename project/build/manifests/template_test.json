@@ -5,9 +5,9 @@
   "platform": "ml307y",
   "storage_namespace": "template_test",
   "entry": "template_product_start",
-  "board_prepare": "template_board_prepare",
   "test_only": true,
   "modules": [],
+  "devices": [],
   "sources": [
     "project/src/product_main.c"
   ],

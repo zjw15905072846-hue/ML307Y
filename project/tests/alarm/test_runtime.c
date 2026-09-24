@@ -141,18 +141,32 @@ static bool queue_put(void *queue, const void *message, uint32_t wait)
 }
 
 /*******************************************************************************
-* Function Name  : output
+* Function Name  : set_led
 * Description    : 捕获指示灯
-* Input          : user/led/buzzer - 输出
+* Input          : user - 保留；on - 输出
 * Output         : led_on
 * Return         : true
 * Attention      : 不操作GPIO
 *******************************************************************************/
-static bool output(void *user, bool led, bool buzzer)
+static bool set_led(void *user, bool on)
 {
     (void)user;
-    (void)buzzer;
-    led_on = led;
+    led_on = on;
+    return true;
+}
+
+/*******************************************************************************
+* Function Name  : set_buzzer
+* Description    : 模拟蜂鸣器输出
+* Input          : user - 保留；on - 输出
+* Output         : 无
+* Return         : true
+* Attention      : 不操作GPIO
+*******************************************************************************/
+static bool set_buzzer(void *user, bool on)
+{
+    (void)user;
+    (void)on;
     return true;
 }
 
@@ -281,7 +295,7 @@ static bool start_thread(const char *name, void (*entry)(void *), void *argument
 int main(void)
 {
     alarm_button_config_t config = alarm_button_default_config();
-    alarm_button_callbacks_t callbacks = {&runtime, output, NULL, alarm_queue_save_request};
+    alarm_button_callbacks_t callbacks = {&runtime, set_led, set_buzzer, NULL, alarm_queue_save_request};
     storage_interface_t store = {NULL, read_store, write_store, NULL};
     uint16_t first_sequence;
     uint16_t second_sequence;
@@ -358,15 +372,18 @@ int main(void)
     idle.request = 2;
     alarm_handle_background_result(&runtime, &idle, now_ms);
     assert(runtime.button_state.background_idle);
-    services.board.ready = true;
+    services.key.ready = true;
+    services.led.ready = true;
+    services.buzzer.ready = true;
+    services.battery.ready = true;
     services.transport = &transport;
     services.system.allocate = malloc;
     services.system.queue_create = create_queue;
     services.system.thread_start = start_thread;
-    services.board.ready = false;
+    services.key.ready = false;
     assert(!alarm_product_start(&services));
     assert(thread_count == 0);
-    services.board.ready = true;
+    services.key.ready = true;
     queue_limit = 0;
     assert(!alarm_product_start(&services));
     assert(thread_count == 0);

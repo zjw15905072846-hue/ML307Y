@@ -5,17 +5,17 @@
 ```text
 project/
 ├─ inc/                        全项目共用头文件目录
-│  ├─ key.h、indicator.h 等     单文件功能和公共接口直接放此处
+│  ├─ key.h、indicator.h 等     公共状态与功能接口直接放此处
 │  ├─ alarm_button/            报警功能的多个头文件
 │  ├─ kaiwan/                  铠湾协议的多个头文件
 │  ├─ mqtt/                    MQTT 传输的多个头文件
-│  └─ ml307y/                  ML307Y 平台接口与配置
+│  └─ ml307y/                  ML307Y 器件接口与平台配置
 ├─ src/                        全项目共用源码目录
-│  ├─ key.c、indicator.c 等     单文件功能直接放此处
+│  ├─ indicator.c 等           不依赖器件的单文件功能
 │  ├─ alarm_button/            报警业务、队列和手报数据体
 │  ├─ kaiwan/                  铠湾协议编解码与会话
 │  ├─ mqtt/                    传输配置与接收组包
-│  └─ ml307y/                  CM 适配、启动和底包扩展
+│  └─ ml307y/                  按键、灯、蜂鸣器、电池及其他 CM 适配
 ├─ build/                      产品注册表、清单和配套校验
 ├─ tests/                      主机与构建隔离回归
 ├─ tools/                      新产品创建、构建和验收入口
@@ -23,7 +23,7 @@ project/
 └─ SConscript
 ```
 
-只有同一功能有多个文件时才创建对应子目录，不为单文件功能创建空目录。构建清单显式选择源码，因此两个产品仍保持隔离。功耗接口暂集中在 system_interface.h，产品决定休眠条件，ML307Y 适配负责工作锁；板级电池入口使用内部 VBAT，不占用接 LED 的 ADC1。
+只有同一功能有多个文件时才创建对应子目录，不为单文件功能创建空目录。ML307Y 按键、LED、蜂鸣器、电池各有一个实现文件；按键文件同时负责 GPIO 初始化、中断、读取和消抖。OpenCPU 启动任务按构建清单逐个初始化所需器件，选择器检查器件引脚冲突与配置；`indicator.c` 只计算声光时序。两个产品的器件与源码仍保持隔离。功耗接口暂集中在 system_interface.h，产品决定休眠条件，ML307Y 适配负责工作锁；电池文件读取内部 VBAT，不占用接 LED 的 ADC1。
 
 ## 构建
 
@@ -43,9 +43,9 @@ python project/tools/check_artifacts.py
 
 每个产品独立对象目录、SCons 签名缓存、生成配置及固件名；底包可按内容标识复用。build_product.py 的进程锁保护共享厂商生成步骤，切勿同时手工启动其他厂商构建。中断留下锁时先检查锁内 PID 确认进程退出，再移除该锁。
 
-**默认报警包尚不能投入实机报警。**原板物理第 26、96 脚未在当前公开 GPIO 映射中得到可用绑定，初始化主动拒绝。账号、密钥和平台约定也未配置。模板包只输出启动诊断，不控制硬件。
+**默认报警包仍需实板与平台验收。**按用户指定的原理图，按键初始化直接尝试模组物理 26 脚的 IOMUX 和 CM GPIO26，并在唤醒未核验时由前台轮询；原理图将该脚标为 RSV，能否读取实体按键必须上板确认。物理 96 脚 LED 暂时禁用，不进行复用、初始化或输出。账号、密钥和平台约定尚未配置；模板包只输出启动诊断，不控制硬件。
 
-报警包上电后若板映射仍未核验，UART0 应先输出 `UART0 ready`，随后输出 `alarm-board-unverified-pin26-pin96` 和 `board not ready`；此时 `alarm-ui`、`alarm-worker` 不会创建。板验证通过后，平台会分别输出 `task alarm-ui created` 和 `task alarm-worker created`，任务创建失败会输出相应 `create failed`，且产品启动向上返回失败。任务创建日志只证明 RTOS 接受创建请求，是否持续运行及复位原因仍需实机观察。
+报警包上电后 UART0 先输出 `UART0 ready`。若 26 脚 IOMUX、GPIO 初始化或首次读取失败，会先输出带 SDK 返回码的 `alarm-key-*` 诊断，再输出 `alarm-key-init`；后续器件、存储、网络及报警任务不会启动。按键初始化成功后输出 `alarm key ready`；其他器件就绪后平台会分别输出 `task alarm-ui created` 和 `task alarm-worker created`。任务创建日志只证明 RTOS 接受创建请求，实体按键触发、任务持续运行及复位原因仍需实机观察。
 
 ## 报警行为
 

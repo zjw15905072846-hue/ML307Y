@@ -36,7 +36,8 @@ int alarm_button_init(alarm_button_state_t *button_state,
                       const alarm_button_callbacks_t *callbacks)
 {
     uint64_t total;
-    if (!button_state || !config || !callbacks || !callbacks->output || !callbacks->submit_event)
+    if (!button_state || !config || !callbacks || !callbacks->set_led || !callbacks->set_buzzer ||
+        !callbacks->submit_event)
     {
         return ALARM_ERROR_ARGUMENT;
     }
@@ -71,6 +72,20 @@ static void alarm_button_record_fault(alarm_button_state_t *button_state, int er
 }
 
 /*******************************************************************************
+* Function Name  : alarm_button_set_outputs
+* Description    : 按 LED、蜂鸣器的顺序应用本轮声光状态
+* Input          : button_state - 前台状态；led/buzzer - 目标状态
+* Output         : 两个器件的实际输出
+* Return         : true - 均成功；false - 某个器件失败
+* Attention      : 前一个器件失败时不继续写下一个器件
+*******************************************************************************/
+static bool alarm_button_set_outputs(alarm_button_state_t *button_state, bool led, bool buzzer)
+{
+    return button_state->callbacks.set_led(button_state->callbacks.user, led) &&
+           button_state->callbacks.set_buzzer(button_state->callbacks.user, buzzer);
+}
+
+/*******************************************************************************
 * Function Name  : alarm_button_update
 * Description    : 消抖后提交独立事件，同时推进声光提示
 * Input          : button_state - 前台上下文；pressed - 原始逻辑电平；now - 单调毫秒
@@ -90,7 +105,7 @@ void alarm_button_update(alarm_button_state_t *button_state, bool pressed, uint3
     if (alarm_key_sample(&button_state->key, pressed, now, button_state->config.debounce_ms) == ALARM_KEY_PRESS)
     {
         /* 在Flash操作前立即点亮，持久化失败仍按未确认提示处理。 */
-        if (!button_state->callbacks.output(button_state->callbacks.user, true, false))
+        if (!alarm_button_set_outputs(button_state, true, false))
         {
             alarm_button_record_fault(button_state, ALARM_ERROR_NOT_READY);
         }
@@ -117,7 +132,7 @@ void alarm_button_update(alarm_button_state_t *button_state, bool pressed, uint3
         }
     }
     output = alarm_indicator_tick(&button_state->indicator, now);
-    if (!button_state->callbacks.output(button_state->callbacks.user, output.led, output.buzzer))
+    if (!alarm_button_set_outputs(button_state, output.led, output.buzzer))
     {
         alarm_button_record_fault(button_state, ALARM_ERROR_NOT_READY);
     }

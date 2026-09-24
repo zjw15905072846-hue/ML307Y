@@ -7,7 +7,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTERS = (
     "project/src/ml307y/system_port.c",
-    "project/src/ml307y/alarm_hal.c",
     "project/src/ml307y/file_port.c",
     "project/src/ml307y/mqtt_port.c",
 )

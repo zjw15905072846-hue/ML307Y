@@ -6,12 +6,17 @@ import os
 import re
 
 MODULES = {
-    "key": ["src/key.c"],
     "indicator": ["src/indicator.c"],
     "reporting": ["src/alarm_button/alarm_core.c"],
     "kaiwan": ["src/kaiwan/kaiwan_protocol.c", "src/kaiwan/kaiwan_session.c"],
     "mqtt": ["src/mqtt/mqtt_config.c", "src/mqtt/mqtt_receive.c", "src/ml307y/mqtt_port.c"],
     "storage": ["src/snapshot_store.c", "src/ml307y/file_port.c"],
+}
+DEVICES = {
+    "key": "src/ml307y/alarm_key.c",
+    "led": "src/ml307y/alarm_led.c",
+    "buzzer": "src/ml307y/alarm_buzzer.c",
+    "battery": "src/ml307y/alarm_battery.c",
 }
 PLATFORM_SOURCES = ["project/src/ml307y/diag_uart.c",
                     "project/src/ml307y/system_port.c",
@@ -31,9 +36,8 @@ def select(root, arguments):
     for field in ("name", "board", "platform", "storage_namespace"):
         if not re.fullmatch(r"[a-z][a-z0-9_]*", product[field]):
             raise ValueError("Invalid manifest identifier: " + field)
-    for field in ("entry", "board_prepare"):
-        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", product[field]):
-            raise ValueError("Invalid C entry identifier: " + field)
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", product["entry"]):
+        raise ValueError("Invalid C entry identifier: entry")
     if type(product["id"]) is not int or not 0 < product["id"] <= 0xffffffff:
         raise ValueError("Product ID must be a nonzero uint32")
     if any(arguments.get(k, "n").lower() != "n" for k in ("demo", "test", "xydemo")):
@@ -67,11 +71,26 @@ def select(root, arguments):
     for resource in resources:
         if not re.fullmatch(r"(PIN|PWM|RTC|TIMER|UART|I2C|SPI):[0-9]+|STORE:[a-z][a-z0-9_]*", resource):
             raise ValueError("Invalid resource claim: " + resource)
-    if product["board"] == "alarm_board_v1" and product.get("pinmap_verified"):
-        # The shipped public CM mapping covers these pads only. No guessed 26/96 binding.
-        raise ValueError("alarm board physical 26/96 mappings require a reviewed board adapter")
-    if product.get("wake_verified") and not product.get("pinmap_verified"):
-        raise ValueError("Wake verification requires a verified board")
+    devices = product["devices"]
+    if not isinstance(devices, list) or any(not isinstance(device, str) or device not in DEVICES
+                                              for device in devices) or len(devices) != len(set(devices)):
+        raise ValueError("Invalid or duplicate device")
+    configured_pins = []
+    if "key" in devices:
+        configured_pins.append(26)
+    for device, field, minimum in (("led", "led_sdk_pin", -1),
+                                   ("buzzer", "buzzer_sdk_pin", 0)):
+        if device in devices:
+            pin = product.get(field)
+            if type(pin) is not int or pin < minimum:
+                raise ValueError("Invalid device pin: " + field)
+            if pin >= 0:
+                configured_pins.append(pin)
+    if len(configured_pins) != len(set(configured_pins)):
+        raise ValueError("Device SDK pin collision")
+    if "buzzer" in devices and (type(product.get("buzzer_hz")) is not int or
+                                not 0 <= product["buzzer_hz"] <= 20000):
+        raise ValueError("Invalid buzzer frequency")
     if "STORE:" + product["storage_namespace"] not in resources:
         raise ValueError("Declare the product storage namespace in resources")
     sources = PLATFORM_SOURCES + product["sources"]
@@ -79,6 +98,7 @@ def select(root, arguments):
         if module not in MODULES:
             raise ValueError("Unknown component: " + module)
         sources += ["project/" + f for f in MODULES[module]]
+    sources += ["project/" + DEVICES[device] for device in devices]
     if len(sources) != len(set(sources)):
         raise ValueError("Duplicate source")
     for source in sources:
@@ -156,12 +176,13 @@ def apply(env, root, arguments):
             '#define PRODUCT_NAME "' + spec["name"] + '"',
             "#define PRODUCT_ID " + str(spec["id"]) + "U",
             "#define PRODUCT_ENTRY " + spec["entry"],
-            "#define PRODUCT_BOARD_PREPARE " + spec["board_prepare"],
             "#define PRODUCT_HAS_STORAGE " + str(int("storage" in spec["modules"])),
             "#define PRODUCT_HAS_MQTT " + str(int("mqtt" in spec["modules"])) ,
             '#define PRODUCT_STORAGE_NAMESPACE "' + spec["storage_namespace"] + '"']
-        for field, default in [("key_sdk_pin",-1),("led_sdk_pin",-1),("buzzer_sdk_pin",16),
-                               ("pinmap_verified",False),("wake_verified",False),("buzzer_hz",0)]:
+        for device in DEVICES:
+            header.append("#define PRODUCT_HAS_" + device.upper() + " " + str(int(device in spec["devices"])))
+        for field, default in [("led_sdk_pin",-1),("buzzer_sdk_pin",16),
+                               ("wake_verified",False),("buzzer_hz",0)]:
             header.append("#define ALARM_BUTTON_" + field.upper() + " " + str(int(spec.get(field, default))))
         (generated / "product_build_config.h").write_text("\n".join(header)+"\n", encoding="utf-8")
         (output / "product-manifest.json").write_text(json.dumps(

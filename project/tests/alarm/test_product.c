@@ -59,18 +59,32 @@ static bool write_disk(void *u, const void *p, size_t n)
 }
 
 /*******************************************************************************
-* Function Name  : output
-* Description    : 记录声光实际命令
-* Input          : 见签名；context/store 为独占上下文，now 为单调毫秒
-* Output         : 上下文及显式输出参数
-* Return         : 见签名；状态码 ALARM_OK 表示成功，负值表示失败
-* Attention      : 由一个业务任务串行调用；存储端口必须提供原子提交
+* Function Name  : set_led
+* Description    : 记录 LED 输出
+* Input          : user - 保留；on - 目标状态
+* Output         : led
+* Return         : true
+* Attention      : 仅供测试
 *******************************************************************************/
-static bool output(void *u, bool l, bool b)
+static bool set_led(void *user, bool on)
 {
-    (void)u;
-    led = l;
-    buzzer = b;
+    (void)user;
+    led = on;
+    return true;
+}
+
+/*******************************************************************************
+* Function Name  : set_buzzer
+* Description    : 记录蜂鸣器输出
+* Input          : user - 保留；on - 目标状态
+* Output         : buzzer
+* Return         : true
+* Attention      : 仅供测试
+*******************************************************************************/
+static bool set_buzzer(void *user, bool on)
+{
+    (void)user;
+    buzzer = on;
     return true;
 }
 
@@ -152,7 +166,7 @@ static int complete_confirmation(uint16_t sequence, uint32_t now)
 int main(void)
 {
     alarm_storage_port_t p = {0, read_disk, write_disk, NULL};
-    alarm_button_callbacks_t callbacks = {0, output, 0, submit_event};
+    alarm_button_callbacks_t callbacks = {0, set_led, set_buzzer, 0, submit_event};
     alarm_button_config_t c = alarm_button_default_config();
     uint32_t first;
     uint32_t second;

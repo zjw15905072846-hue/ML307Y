@@ -7,7 +7,6 @@
   "entry": "alarm_product_start",
   "test_only": false,
   "modules": [
-    "key",
     "indicator",
     "reporting",
     "kaiwan",
@@ -17,13 +16,11 @@
   "sources": [
     "project/src/alarm_button/alarm_button.c",
     "project/src/alarm_button/alarm_runtime.c",
-    "project/src/alarm_button/handset_payload.c",
-    "project/src/board.c",
-    "project/src/ml307y/alarm_hal.c"
+    "project/src/alarm_button/handset_payload.c"
   ],
+  "devices": ["key", "led", "buzzer", "battery"],
   "resources": [
     "PIN:26",
-    "PIN:96",
     "PIN:74",
     "PWM:0",
     "UART:0",
@@ -31,12 +28,9 @@
     "PIN:18",
     "STORE:alarm_button"
   ],
-  "pinmap_verified": false,
   "wake_verified": false,
-  "key_sdk_pin": 26,
-  "led_sdk_pin": 96,
+  "led_sdk_pin": -1,
   "buzzer_sdk_pin": 16,
   "buzzer_kind": "unverified",
-  "buzzer_hz": 0,
-  "board_prepare": "alarm_board_prepare"
+  "buzzer_hz": 0
 }

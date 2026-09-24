@@ -1,6 +1,8 @@
 #pragma once
 /*------------------------------------------includes--------------------------------------------*/
 #include "alarm_button/alarm_core.h"
+#include "key.h"
+#include "indicator.h"
 /*-------------------------------------------define---------------------------------------------*/
 #define ALARM_BUTTON_PRODUCT_ID 0x41420101U /* 报警产品的持久化身份，不随目录调整改变。 */
 
@@ -12,12 +14,12 @@ typedef struct
     alarm_indicator_pattern_t pattern; /* 固定提示与等待回执时序。 */
 } alarm_button_config_t;
 
-/* 前台只通过回调提交事件及控制声光，不直接读写存储或 MQTT。 */
+/* 前台分别控制灯和蜂鸣器，并通过回调提交事件。 */
 typedef struct
 {
     void *user; /* 回调上下文，在产品运行期间保持有效。 */
-    /* 板级声光写入结果；失败时上层必须保留故障状态。 */
-    bool (*output)(void *user, bool led, bool buzzer);
+    bool (*set_led)(void *user, bool on);
+    bool (*set_buzzer)(void *user, bool on);
     /* 将本地故障上送后台或诊断端，不把错误伪装成成功。 */
     void (*fault)(void *user, int error);
     /* 投递一次独立保存请求；返回值只表示投递结果，不代表已经落盘。 */

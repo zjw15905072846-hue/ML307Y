@@ -468,7 +468,8 @@ static void alarm_collect_device_info(alarm_runtime_t *runtime, uint32_t now)
             runtime->telemetry.valid |= ALARM_TIME_UTC;
         }
     }
-    if (runtime->services->board.battery_voltage && runtime->services->board.battery_voltage(runtime->services->board.user, &millivolts))
+    if (runtime->services->battery.read_voltage &&
+        runtime->services->battery.read_voltage(runtime->services->battery.user, &millivolts))
     {
         runtime->telemetry.battery_mv = millivolts;
         runtime->telemetry.valid |= ALARM_TELEMETRY_VOLTAGE;
@@ -735,17 +736,31 @@ static int alarm_queue_save_request(void *user, uint32_t request, const alarm_ev
 }
 
 /*******************************************************************************
-* Function Name  : alarm_set_outputs
-* Description    : 把统一声光状态交给唯一板级入口
-* Input          : user - 上下文；led/buzzer - 状态
-* Output         : 板输出
+* Function Name  : alarm_set_led
+* Description    : 把前台 LED 状态交给 LED 器件
+* Input          : user - 上下文；on - 目标状态
+* Output         : LED 输出
 * Return         : true成功
 * Attention      : 只有前台调用
 *******************************************************************************/
-static bool alarm_set_outputs(void *user, bool led, bool buzzer)
+static bool alarm_set_led(void *user, bool on)
 {
     alarm_runtime_t *runtime = user;
-    return runtime->services->board.outputs(runtime->services->board.user, led, buzzer);
+    return runtime->services->led.set(runtime->services->led.user, on);
+}
+
+/*******************************************************************************
+* Function Name  : alarm_set_buzzer
+* Description    : 把前台蜂鸣器状态交给蜂鸣器器件
+* Input          : user - 上下文；on - 目标状态
+* Output         : 蜂鸣器输出
+* Return         : true成功
+* Attention      : 只有前台调用
+*******************************************************************************/
+static bool alarm_set_buzzer(void *user, bool on)
+{
+    alarm_runtime_t *runtime = user;
+    return runtime->services->buzzer.set(runtime->services->buzzer.user, on);
 }
 
 /*******************************************************************************
@@ -845,7 +860,7 @@ static void alarm_read_background_results(alarm_runtime_t *runtime, uint32_t now
 static void alarm_process_button(alarm_runtime_t *runtime, uint32_t now)
 {
     bool pressed;
-    if (runtime->services->board.read_key(runtime->services->board.user, &pressed))
+    if (runtime->services->key.read(runtime->services->key.user, &pressed))
     {
         alarm_button_update(&runtime->button_state, pressed, now);
         return;
@@ -894,7 +909,7 @@ static void alarm_wait_for_next_event(alarm_runtime_t *runtime, uint32_t now)
 {
     system_interface_t *system = &runtime->services->system;
     alarm_message_t message;
-    bool sleep_allowed = runtime->services->board.wake_verified && runtime->services->board.set_wakeup &&
+    bool sleep_allowed = runtime->services->key.wake_verified && runtime->services->key.set_wakeup &&
                          alarm_button_can_sleep(&runtime->button_state);
     uint32_t wait_ms = sleep_allowed ? (uint32_t)(runtime->next_heartbeat_ms - now) : 5U;
     bool received;
@@ -954,7 +969,8 @@ bool alarm_product_start(product_services_t *services)
     alarm_runtime_t *runtime;
     alarm_button_config_t config = alarm_button_default_config();
     alarm_button_callbacks_t callbacks;
-    if (!services || !services->board.ready || !services->transport)
+    if (!services || !services->key.ready || !services->led.ready || !services->buzzer.ready ||
+        !services->battery.ready || !services->transport)
     {
         return false;
     }
@@ -970,7 +986,8 @@ bool alarm_product_start(product_services_t *services)
     runtime->background_queue = services->system.queue_create(ALARM_BACKGROUND_QUEUE_CAPACITY, sizeof(alarm_message_t));
     runtime->front_queue = services->system.queue_create(ALARM_FRONT_QUEUE_CAPACITY, sizeof(alarm_message_t));
     callbacks.user = runtime;
-    callbacks.output = alarm_set_outputs;
+    callbacks.set_led = alarm_set_led;
+    callbacks.set_buzzer = alarm_set_buzzer;
     callbacks.fault = alarm_report_front_error;
     callbacks.submit_event = alarm_queue_save_request;
     if (!runtime->background_queue || !runtime->front_queue ||
@@ -979,9 +996,9 @@ bool alarm_product_start(product_services_t *services)
         services->system.fault("alarm-initialize", ALARM_ERROR_NOT_READY);
         return false;
     }
-    if (services->board.set_wakeup)
+    if (services->key.set_wakeup)
     {
-        services->board.set_wakeup(services->board.user, alarm_notify_key_wakeup, runtime);
+        services->key.set_wakeup(services->key.user, alarm_notify_key_wakeup, runtime);
     }
     if (!services->system.thread_start("alarm-ui", alarm_front_task, runtime, 8192U, true))
     {

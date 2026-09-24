@@ -21,9 +21,9 @@ python project/tools/build_product.py desk_caller
   "platform": "ml307y",
   "storage_namespace": "desk_caller",
   "entry": "desk_caller_product_start",
-  "board_prepare": "desk_caller_board_prepare",
   "test_only": true,
   "modules": [],
+  "devices": [],
   "sources": ["project/src/desk_caller.c"],
   "resources": ["STORE:desk_caller", "UART:0", "PIN:17", "PIN:18"]
 }
@@ -36,7 +36,7 @@ python project/tools/build_product.py desk_caller
 | 变化 | 修改位置 | 约束 |
 |---|---|---|
 | 同一块板，新增业务 | src/ 中的产品文件；多文件时使用产品子目录 | 独立规则、入口、时间参数和协议身份 |
-| 业务相同，接线或外设改变 | 板级文件与对应 ML307Y 适配文件 | 物理脚、有效电平、复用、唤醒依据写清 |
+| 业务相同，接线或外设改变 | 对应器件文件与产品清单 | 物理脚、有效电平、复用、唤醒依据写清 |
 | 更换芯片或 OpenCPU SDK | 平台子目录与构建平台表 | 对齐公共接口；不得沿用另一 SDK 的数字引脚编号 |
 | 两个产品确实共用的能力 | inc/、src/ 中的共用文件 | 接受上下文与参数，不引用产品头文件，不直接调用 CM 接口 |
 | 不同云平台或设备报文 | 对应协议子目录或产品子目录 | 产品选择身份；设备类型、心跳周期不写成全产品默认值 |
@@ -48,10 +48,10 @@ python project/tools/build_product.py desk_caller
 ```text
 明确产品需求
 ├─ 选择硬件板
-│  ├─ 已有板且接线一致 → 复用板源码与 prepare_board 入口
-│  └─ 新板或接线不同 → 建立新板定义及平台 HAL 绑定
+│  ├─ 已有板且接线一致 → 在清单中选择现有器件
+│  └─ 新板或接线不同 → 建立对应器件实现并登记初始化方式
 ├─ 选择共用组件
-│  ├─ 按键 → key；只处理边沿，长按等规则在产品层
+│  ├─ 按键 → 器件文件负责初始化、读取和消抖；长按等规则在产品层
 │  ├─ 声光 → indicator；产品传入自己的时序
 │  ├─ 铠湾 → kaiwan + mqtt；选对应 devices 编码器
 │  └─ 持久队列 → reporting + storage；先确认该事件格式适合此产品
@@ -60,7 +60,7 @@ python project/tools/build_product.py desk_caller
 │  ├─ 显式源文件与 GPIO/PWM/定时器等资源声明
 │  └─ 自己的协议身份、超时、周期和待机策略
 ├─ 实现业务
-│  ├─ prepare_board 成功 → 通过 product_services_t 获得服务
+│  ├─ 所需器件初始化成功 → 通过 product_services_t 获得服务
 │  ├─ 前台处理输入及提示 → 消息投递给后台
 │  ├─ 后台保存成功 → 允许发送
 │  └─ 对应业务确认且删除成功 → 完成该事件
@@ -71,8 +71,8 @@ python project/tools/build_product.py desk_caller
 ```
 
 1. 单文件功能直接放在 inc/、src/ 根目录；产品需要多个文件时再建立同名子目录。参数通过上下文传给公共模块，不要改报警产品的 1／3／30 秒配置来适配另一个产品。
-2. 更新构建清单中的 modules、sources、board_prepare 与 resources。所有被选择的自研源文件必须位于 project 内；禁止递归搜集所有产品。
-3. 同板复用时在新清单列出所需板源码及 HAL，绑定已存在的板入口。板的核验保护继续生效，不能通过改产品名字绕过。
+2. 更新构建清单中的 modules、devices、sources 与 resources。所选器件的源码由选择器加入；其余自研源码显式列在 sources，且必须位于 project 内。
+3. 同板复用时在新清单列出所需器件；OpenCPU 启动任务按清单逐个初始化。器件映射核验继续生效，不能通过改产品名字绕过。新增器件类型时同步增加选择器和启动任务中的对应项。
 4. 声光输出由一个前台入口拥有；后台只发事件，不同时写 LED/PWM。持久队列、协议工作区和传输连接由各自上下文拥有。
 5. 创建该产品的 tests 用例后执行构建工具，检查与 alarm_button 切换后的源码、符号、存储命名空间和固件名。
 

@@ -1,5 +1,7 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "alarm_button/alarm_core.h"
+#include "key.h"
+#include "indicator.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

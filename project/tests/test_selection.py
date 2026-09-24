@@ -36,6 +36,11 @@ class ProductSelectionTests(unittest.TestCase):
         alarm = select(self.root, {"product": "alarm_button"})
         template = select(self.root, {"product": "template_test"})
         self.assertIn("project/src/alarm_button/alarm_runtime.c", alarm["sources"])
+        self.assertEqual(alarm["devices"], ["key", "led", "buzzer", "battery"])
+        self.assertEqual(template["devices"], [])
+        for device in ("key", "led", "buzzer", "battery"):
+            self.assertIn("project/src/ml307y/alarm_" + device + ".c", alarm["sources"])
+        self.assertNotIn("project/src/ml307y/alarm_board.c", alarm["sources"])
         self.assertFalse(any("alarm_" in path for path in template["sources"]))
         self.assertNotEqual(alarm["entry"], template["entry"])
         self.assertNotEqual(alarm["storage_namespace"], template["storage_namespace"])
@@ -84,10 +89,22 @@ class ProductSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select(self.root, {"product": "alarm_button"})
 
-    def test_unknown_pin_gate(self):
-        self.alarm_change(pinmap_verified=True)
-        with self.assertRaises(ValueError):
-            select(self.root, {"product": "alarm_button"})
+    def test_direct_key_has_no_mapping_gate(self):
+        alarm = select(self.root, {"product": "alarm_button"})
+        self.assertIn("PIN:26", alarm["resources"])
+        self.assertNotIn("pinmap_verified", alarm)
+        self.assertNotIn("key_sdk_pin", alarm)
+
+    def test_invalid_device_configuration(self):
+        original = ROOT / "project/build/manifests/alarm_button.json"
+        selected = self.root / "project/build/manifests/alarm_button.json"
+        for changes in ({"devices": ["key", "key"]}, {"devices": ["unknown"]},
+                        {"led_sdk_pin": 26}, {"buzzer_sdk_pin": 26},
+                        {"buzzer_hz": 20001}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                shutil.copyfile(original, selected)
+                self.alarm_change(**changes)
+                select(self.root, {"product": "alarm_button"})
 
     def test_path_escape(self):
         for path in ("../escape.c", "G:/escape.c", "custom/custom_main.c"):

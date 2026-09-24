@@ -39,7 +39,7 @@ def record_application(root, spec, base_id):
               "board": spec["board"], "platform": spec["platform"],
               "storage_namespace": spec["storage_namespace"], "base": base,
               "sources": spec["sources"], "entry": spec["entry"],
-              "hardware_verified": spec.get("pinmap_verified", False),
+              "hardware_verified": False,
               "files": {p: sha256(image / p) for p in names}}
     (output / "release.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return output

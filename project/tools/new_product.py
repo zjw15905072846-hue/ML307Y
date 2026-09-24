@@ -26,12 +26,11 @@ def create_product(root, name, product_id):
     spec = json.loads((root / "project/build/manifests/template_test.json").read_text(encoding="utf-8"))
     shared_resources = [item for item in spec["resources"] if not item.startswith("STORE:")]
     spec.update(name=name, id=product_id, storage_namespace=name,
-                entry=name + "_product_start", board_prepare=name + "_board_prepare",
-                 sources=["project/src/" + name + ".c"],
-                 resources=["STORE:" + name] + shared_resources)
+                entry=name + "_product_start",
+                sources=["project/src/" + name + ".c"],
+                resources=["STORE:" + name] + shared_resources)
     source = (root / "project/src/product_main.c").read_text(encoding="utf-8")
     source = source.replace("template_product_start", spec["entry"])
-    source = source.replace("template_board_prepare", spec["board_prepare"])
     source = source.replace("template-test-started", name + "-test-started")
     destination.parent.mkdir(parents=True, exist_ok=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)

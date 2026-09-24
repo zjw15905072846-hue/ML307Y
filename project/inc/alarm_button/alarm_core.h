@@ -4,8 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "storage_interface.h"
-#include "key.h"
-#include "indicator.h"
 /*-------------------------------------------define---------------------------------------------*/
 #define ALARM_CAPACITY 96U /* 单份报警镜像可保存的事件数。 */
 #define ALARM_STORAGE_EMPTY 1 /* 已验证介质为空白，才允许创建初始镜像。 */
@@ -96,15 +94,6 @@ typedef struct
 } alarm_event_reporter_t;
 
 /*-------------------------------------------function---------------------------------------------*/
-/* 对稳定输入发出一次边沿事件；使用无符号差值处理毫秒回绕。 */
-alarm_key_event_t alarm_key_sample(alarm_key_state_t *context, bool pressed, uint32_t now, uint32_t debounce_ms);
-/* 启动或替换当前提示；event_id=0表示未成功持久化，不接受成功回执。 */
-void alarm_indicator_start(alarm_indicator_state_t *context, const alarm_indicator_pattern_t *pattern, uint32_t event_id,
-                        uint32_t now);
-void alarm_indicator_on_confirmation(alarm_indicator_state_t *context, uint32_t event_id);
-/* 显式停止共用序列；本产品不以提前成功调用此接口打断前4秒。 */
-void alarm_indicator_stop(alarm_indicator_state_t *context);
-alarm_indicator_output_t alarm_indicator_tick(alarm_indicator_state_t *context, uint32_t now);
 /* 仅确认空白的介质才初始化；不覆盖陌生产品、损坏或旧版镜像。 */
 int alarm_store_open(alarm_event_store_t *store, uint32_t product_id, const alarm_storage_port_t *port);
 int alarm_store_enqueue(alarm_event_store_t *store, const alarm_event_t *event, uint32_t *id);

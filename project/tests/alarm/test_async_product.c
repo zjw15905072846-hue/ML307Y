@@ -12,18 +12,32 @@ static bool buzzer;
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
-* Function Name  : capture_output
-* Description    : 捕获前台声光输出
-* Input          : user - 保留；l/b - 输出状态
-* Output         : led/buzzer
+* Function Name  : capture_led
+* Description    : 捕获前台 LED 输出
+* Input          : user - 保留；on - 输出状态
+* Output         : led
 * Return         : true
 * Attention      : 不执行后台工作
 *******************************************************************************/
-static bool capture_output(void *user, bool l, bool b)
+static bool capture_led(void *user, bool on)
 {
     (void)user;
-    led = l;
-    buzzer = b;
+    led = on;
+    return true;
+}
+
+/*******************************************************************************
+* Function Name  : capture_buzzer
+* Description    : 捕获前台蜂鸣器输出
+* Input          : user - 保留；on - 输出状态
+* Output         : buzzer
+* Return         : true
+* Attention      : 不执行后台工作
+*******************************************************************************/
+static bool capture_buzzer(void *user, bool on)
+{
+    (void)user;
+    buzzer = on;
     return true;
 }
 
@@ -56,7 +70,7 @@ int main(void)
 {
     alarm_button_state_t button_state;
     alarm_button_config_t config = alarm_button_default_config();
-    alarm_button_callbacks_t callbacks = {0, capture_output, 0, queue_submit};
+    alarm_button_callbacks_t callbacks = {0, capture_led, capture_buzzer, 0, queue_submit};
     uint32_t first;
     unsigned cycle;
     assert(alarm_button_init(&button_state, &config, &callbacks) == ALARM_OK);

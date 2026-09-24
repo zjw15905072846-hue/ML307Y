@@ -2,6 +2,18 @@
 #include "ml307y/ml307y_port.h"
 #include "ml307y/diag_uart.h"
 #include "product_build_config.h"
+#if PRODUCT_HAS_KEY
+#include "ml307y/alarm_key.h"
+#endif
+#if PRODUCT_HAS_LED
+#include "ml307y/alarm_led.h"
+#endif
+#if PRODUCT_HAS_BUZZER
+#include "ml307y/alarm_buzzer.h"
+#endif
+#if PRODUCT_HAS_BATTERY
+#include "ml307y/alarm_battery.h"
+#endif
 #include "cm_os.h"
 #include "cm_sys.h"
 #include <string.h>
@@ -18,18 +30,19 @@ _Static_assert(offsetof(mbedtls_aes_context, MBEDTLS_PRIVATE(buf)) == 16,
 /*-------------------------------------------define---------------------------------------------*/
 /*-------------------------------------------typedef---------------------------------------------*/
 /*-------------------------------------------variables-------------------------------------------*/
-extern bool PRODUCT_BOARD_PREPARE(product_services_t *services);
 extern bool PRODUCT_ENTRY(product_services_t *services);
 /* 当前构建只选择一个产品，服务容器在产品任务整个生命周期内有效。 */
 static product_services_t selected_product_services;
+/* 同一进程内每创建一个启动任务递增；整机复位后从零开始。 */
+static unsigned product_boot_attempts;
 static const product_descriptor_t selected_product = {PRODUCT_ID, PRODUCT_NAME, PRODUCT_STORAGE_NAMESPACE,
-                                               PRODUCT_BOARD_PREPARE, PRODUCT_ENTRY};
+                                               PRODUCT_ENTRY};
 
 /*-------------------------------------------function---------------------------------------------*/
 
 /*******************************************************************************
 * Function Name  : product_boot_initialize
-* Description    : 验证底包并依次绑定系统、板、存储、网络与产品入口
+* Description    : 验证底包并按清单依次初始化系统、器件、存储、网络与产品入口
 * Input          : 无
 * Output         : 产品服务与业务任务
 * Return         : true - 启动完成；false - 初始化失败
@@ -40,7 +53,10 @@ static bool product_boot_initialize(void)
 
     if (ml307y_uart_diag_init() == 0)
     {
+        ml307y_uart_diag_printf("00000!\n");
         ml307y_uart_diag_printf("[project] UART0 ready");
+        ml307y_uart_diag_printf("[project] boot attempt=%u tick=%u", product_boot_attempts,
+                                (unsigned)osKernelGetTickCount());
     }
     /* 先核对编译所用底包身份，避免错误接口表进入产品初始化。 */
     if (strcmp(project_base_identity(), PROJECT_BASE_ID) != 0)
@@ -56,11 +72,37 @@ static bool product_boot_initialize(void)
         ml307y_uart_diag_printf("[project] system not ready");
         return false;
     }
-    if (!selected_product.prepare_board(&selected_product_services))
+#if PRODUCT_HAS_KEY
+    if (!ml307y_alarm_key_init(&selected_product_services.key, ALARM_BUTTON_WAKE_VERIFIED))
     {
-        ml307y_uart_diag_printf("[project] board not ready");
+        selected_product_services.system.fault("alarm-key-init", -1);
         return false;
     }
+    ml307y_uart_diag_printf("[project] alarm key ready");
+#endif
+#if PRODUCT_HAS_LED
+    if (!ml307y_alarm_led_init(&selected_product_services.led, ALARM_BUTTON_LED_SDK_PIN))
+    {
+        selected_product_services.system.fault("alarm-led-init", -1);
+        return false;
+    }
+#endif
+#if PRODUCT_HAS_BUZZER
+    if (!ml307y_alarm_buzzer_init(&selected_product_services.buzzer, ALARM_BUTTON_BUZZER_SDK_PIN,
+                                  ALARM_BUTTON_BUZZER_HZ))
+    {
+        selected_product_services.system.fault("alarm-buzzer-init", -1);
+        return false;
+    }
+#endif
+#if PRODUCT_HAS_BATTERY
+    ml307y_alarm_battery_bind(&selected_product_services.battery);
+    if (!selected_product_services.battery.ready)
+    {
+        selected_product_services.system.fault("alarm-battery-init", -1);
+        return false;
+    }
+#endif
 #if PRODUCT_HAS_STORAGE
     if (!ml307y_storage_create(&selected_product_services))
     {
@@ -75,7 +117,7 @@ static bool product_boot_initialize(void)
         return false;
     }
 #endif
-    /* 板、存储和传输端口就绪后，最后启动产品业务。 */
+    /* 器件、存储和传输端口就绪后，最后启动产品业务。 */
     if (!selected_product.start(&selected_product_services))
     {
         selected_product_services.system.fault("product-start", -1);
@@ -95,10 +137,13 @@ static bool product_boot_initialize(void)
 static void product_boot_task(void *argument)
 {
     (void)argument;
+    ++product_boot_attempts;
     (void)product_boot_initialize();
+    ml307y_uart_diag_printf("Hello World!\n");
     while (1)
     {
-        osDelay(60U * osKernelGetTickFreq());
+        ml307y_uart_diag_printf("11111\n");
+        osDelay(5U * osKernelGetTickFreq());
     }
 }
 

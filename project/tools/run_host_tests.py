@@ -30,11 +30,13 @@ def main():
     out = ROOT / "out/host-tests"
     out.mkdir(parents=True, exist_ok=True)
     includes = [p for p in INCLUDES if not p.startswith("include/")]
-    includes += ["project/tests", "project/tests/alarm", "include/platform",
+    includes += ["project/tests", "project/tests/alarm", "project/tests/mocks",
+                 "include/cmiot", "include/platform",
                  "project/tests/vendor/cJSON", "project/tests/vendor/mbedtls-3.2.1/include",
                  "project/tests/vendor/mbedtls-3.2.1/library"]
+    device_mocks = ["project/tests/mocks/cm_alarm_devices.c"]
     core = ["project/src/alarm_button/alarm_core.c",
-            "project/src/key.c", "project/src/indicator.c"]
+            "project/src/ml307y/alarm_key.c", "project/src/indicator.c"] + device_mocks
     app = core + ["project/src/alarm_button/alarm_button.c"]
     payload = ["project/src/alarm_button/handset_payload.c"]
     crypto = ["project/src/kaiwan/kaiwan_session.c",
@@ -43,7 +45,11 @@ def main():
     crypto += ["project/tests/vendor/mbedtls-3.2.1/library/" + f
                for f in ("aes.c", "platform_util.c", "platform.c")]
     suites = {"test_alarm_core": core, "test_product": app, "test_async_product": app,
-              "test_payload": payload, "test_board": ["project/src/board.c"],
+              "test_payload": payload,
+              "test_devices": ["project/src/ml307y/alarm_key.c",
+                             "project/src/ml307y/alarm_led.c",
+                             "project/src/ml307y/alarm_buzzer.c",
+                             "project/src/ml307y/alarm_battery.c"] + device_mocks,
               "test_codec": payload + crypto,
               "test_snapshot": core + ["project/src/snapshot_store.c"],
               "test_mqtt_receive": ["project/src/mqtt/mqtt_receive.c"]}
@@ -51,7 +57,10 @@ def main():
         "test_runtime": app + payload + crypto + ["project/src/mqtt/mqtt_config.c"],
         "test_file_port": core + ["project/src/snapshot_store.c"],
         "test_mqtt_port": ["project/src/mqtt/mqtt_config.c", "project/src/mqtt/mqtt_receive.c"],
-        "test_hal": ["project/src/board.c"],
+        "test_hal": ["project/src/ml307y/alarm_key.c",
+                     "project/src/ml307y/alarm_led.c",
+                     "project/src/ml307y/alarm_buzzer.c",
+                     "project/src/ml307y/alarm_battery.c"] + device_mocks,
     }
     for name, sources in optional.items():
         if (ROOT / "project/tests/alarm" / (name + ".c")).exists():
