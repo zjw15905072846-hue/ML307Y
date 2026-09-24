@@ -8,33 +8,33 @@
 #include <stdio.h>
 
 /*-------------------------------------------define---------------------------------------------*/
-#define ML_UART_DIAG_TEXT_SIZE 256U /* 单条诊断含 CRLF 的最大缓冲字节数。 */
+#define ML307Y_UART_DIAG_TEXT_SIZE 256U /* 单条诊断含 CRLF 的最大缓冲字节数。 */
 
 /*-------------------------------------------typedef---------------------------------------------*/
 /*-------------------------------------------variables-------------------------------------------*/
-static osMutexId_t s_uart_diag_lock; /* 串行化多任务写入，防止文本交叉。 */
-static bool s_uart_diag_ready;       /* 串口打开后才允许输出。 */
+static osMutexId_t uart_diag_lock; /* 串行化多任务写入，防止文本交叉。 */
+static bool uart_diag_ready;       /* 串口打开后才允许输出。 */
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
-* Function Name  : ml_uart_diag_init
+* Function Name  : ml307y_uart_diag_init
 * Description    : 将模组17/18脚复用为UART0并配置115200、8N1、无流控
 * Input          : 无
 * Output         : UART0及诊断输出互斥锁
 * Return         : 0成功；负值表示互斥锁、引脚复用或串口打开失败
 * Attention      : 只在产品启动任务中调用；引脚复用失败无法自动恢复原功能
 *******************************************************************************/
-int ml_uart_diag_init(void)
+int ml307y_uart_diag_init(void)
 {
     cm_uart_cfg_t config = {0};
     int result;
 
-    if (s_uart_diag_ready)
+    if (uart_diag_ready)
     {
         return 0;
     }
-    s_uart_diag_lock = osMutexNew(NULL);
-    if (!s_uart_diag_lock)
+    uart_diag_lock = osMutexNew(NULL);
+    if (!uart_diag_lock)
     {
         return -1;
     }
@@ -42,8 +42,8 @@ int ml_uart_diag_init(void)
     if (cm_iomux_set_pin_func(CM_IOMUX_PIN_17, CM_IOMUX_FUNC_FUNCTION1) != 0 ||
         cm_iomux_set_pin_func(CM_IOMUX_PIN_18, CM_IOMUX_FUNC_FUNCTION1) != 0)
     {
-        osMutexDelete(s_uart_diag_lock);
-        s_uart_diag_lock = NULL;
+        osMutexDelete(uart_diag_lock);
+        uart_diag_lock = NULL;
         return -1;
     }
     config.byte_size = CM_UART_BYTE_SIZE_8;
@@ -54,30 +54,30 @@ int ml_uart_diag_init(void)
     result = cm_uart_open(CM_UART_DEV_0, &config);
     if (result != 0)
     {
-        osMutexDelete(s_uart_diag_lock);
-        s_uart_diag_lock = NULL;
+        osMutexDelete(uart_diag_lock);
+        uart_diag_lock = NULL;
         return result;
     }
-    s_uart_diag_ready = true;
+    uart_diag_ready = true;
     return 0;
 }
 
 /*******************************************************************************
-* Function Name  : ml_uart_diag_printf
+* Function Name  : ml307y_uart_diag_printf
 * Description    : 格式化并完整发送一行SSCOM可直接显示的串口文本
 * Input          : format - printf格式字符串；其余参数 - 格式化参数
 * Output         : UART0发送以CRLF结尾的文本
 * Return         : 成功发送的字节数；负值表示未初始化、文本过长或写入失败
 * Attention      : 仅供普通任务调用，不在UART回调或中断内调用；禁止输出凭据
 *******************************************************************************/
-int ml_uart_diag_printf(const char *format, ...)
+int ml307y_uart_diag_printf(const char *format, ...)
 {
-    char text[ML_UART_DIAG_TEXT_SIZE];
+    char text[ML307Y_UART_DIAG_TEXT_SIZE];
     va_list arguments;
     int length;
     int offset = 0;
 
-    if (!s_uart_diag_ready || !format)
+    if (!uart_diag_ready || !format)
     {
         return -1;
     }
@@ -91,7 +91,7 @@ int ml_uart_diag_printf(const char *format, ...)
     /* SSCOM 使用 CRLF 分行；预留空间在格式化阶段已经检查。 */
     text[length++] = '\r';
     text[length++] = '\n';
-    if (osMutexAcquire(s_uart_diag_lock, osWaitForever) != osOK)
+    if (osMutexAcquire(uart_diag_lock, osWaitForever) != osOK)
     {
         return -1;
     }
@@ -101,11 +101,11 @@ int ml_uart_diag_printf(const char *format, ...)
         int written = cm_uart_write(CM_UART_DEV_0, text + offset, length - offset, 100);
         if (written <= 0 || written > length - offset)
         {
-            osMutexRelease(s_uart_diag_lock);
+            osMutexRelease(uart_diag_lock);
             return written < 0 ? written : -1;
         }
         offset += written;
     }
-    osMutexRelease(s_uart_diag_lock);
+    osMutexRelease(uart_diag_lock);
     return offset;
 }

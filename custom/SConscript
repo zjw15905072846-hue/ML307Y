@@ -21,6 +21,7 @@ target = None
 #========================================================
 ram_source_files = [
     'custom_main/src/custom_main.c',
+    '../project/src/ml307y/diag_uart.c',
 ]
 
 flash_source_files = [
@@ -36,6 +37,7 @@ public_incs = [
 
 private_incs = [
     current_dir + '/custom_main/inc',
+    Dir('#project/inc').abspath,
 ]
 
 

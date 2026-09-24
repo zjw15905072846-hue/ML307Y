@@ -21,7 +21,7 @@ typedef struct
 /*-------------------------------------------variables-------------------------------------------*/
 static disk_t disk;
 static snapshot_store_t snapshots;
-static al_store_t queue;
+static alarm_event_store_t queue;
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
@@ -110,9 +110,9 @@ static bool preserve(void *user, unsigned slot)
 *******************************************************************************/
 static int open_queue(void)
 {
-    snapshot_file_if_t files = {&disk, probe, read_file, write_file, preserve};
-    storage_if_t port = snapshot_storage(&snapshots, PRODUCT, &files);
-    return al_store_open(&queue, PRODUCT, &port);
+    snapshot_file_interface_t files = {&disk, probe, read_file, write_file, preserve};
+    storage_interface_t port = snapshot_storage(&snapshots, PRODUCT, &files);
+    return alarm_store_open(&queue, PRODUCT, &port);
 }
 
 /*******************************************************************************
@@ -126,7 +126,7 @@ static int open_queue(void)
 static void fresh(void)
 {
     memset(&disk, 0, sizeof(disk));
-    assert(open_queue() == AL_OK);
+    assert(open_queue() == ALARM_OK);
 }
 
 /*******************************************************************************
@@ -139,7 +139,7 @@ static void fresh(void)
 *******************************************************************************/
 int main(void)
 {
-    al_event_t event = {0};
+    alarm_event_t event = {0};
     uint32_t id;
     unsigned writes;
     unsigned i;
@@ -149,70 +149,70 @@ int main(void)
     fresh();
     assert(disk.writes == 1);
     event.event_type = 0x0c;
-    assert(al_store_enqueue(&queue, &event, &id) == AL_OK && id == 1);
-    assert(open_queue() == AL_OK && al_store_pending(&queue) == 1);
-    assert(al_store_enqueue(&queue, &event, &id) == AL_OK && id == 2);
-    assert(open_queue() == AL_OK && al_store_pending(&queue) == 2);
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK && id == 1);
+    assert(open_queue() == ALARM_OK && alarm_store_pending(&queue) == 1);
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK && id == 2);
+    assert(open_queue() == ALARM_OK && alarm_store_pending(&queue) == 2);
 
     for (i = 1; i <= 4; ++i)
     {
         fresh();
-        assert(al_store_enqueue(&queue, &event, &id) == AL_OK);
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
         active = snapshots.active;
         bytes = disk.length[active];
         memcpy(before, disk.data[active], bytes);
         disk.write_mode = (int)i;
         id = 0;
-        assert(al_store_enqueue(&queue, &event, &id) == AL_ERR_STORAGE && id == 0);
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_ERROR_STORAGE && id == 0);
         assert(queue.image.count == 1);
         assert(memcmp(before, disk.data[active], bytes) == 0);
         disk.write_mode = 0;
-        assert(open_queue() == AL_OK);
+        assert(open_queue() == ALARM_OK);
         assert(queue.image.count >= 1);
         if (i == 2 || i == 4)
         {
             assert(snapshots.warning == STORAGE_CORRUPT);
-            assert(al_store_enqueue(&queue, &event, &id) == AL_OK);
+            assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
             assert(disk.preserved == 1);
         }
     }
     fresh();
-    assert(al_store_enqueue(&queue, &event, &id) == AL_OK);
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
     writes = disk.writes;
     disk.probe_error = 1;
-    assert(open_queue() == AL_ERR_STORAGE && disk.writes == writes);
+    assert(open_queue() == ALARM_ERROR_STORAGE && disk.writes == writes);
     disk.probe_error = 0;
     disk.read_error = 1;
-    assert(open_queue() == AL_ERR_STORAGE && disk.writes == writes);
+    assert(open_queue() == ALARM_ERROR_STORAGE && disk.writes == writes);
     disk.read_error = 0;
 
     for (i = 0; i < 3; ++i)
     {
         fresh();
-        assert(al_store_enqueue(&queue, &event, &id) == AL_OK);
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
         disk.data[0][i * 4] ^= 1;
         writes = disk.writes;
-        assert(open_queue() == AL_ERR_FOREIGN);
+        assert(open_queue() == ALARM_ERROR_FOREIGN);
         assert(disk.writes == writes);
     }
     memset(&disk, 0, sizeof(disk));
     disk.exists[0] = true;
     disk.length[0] = 12;
-    assert(open_queue() == AL_ERR_CORRUPT && disk.writes == 0);
+    assert(open_queue() == ALARM_ERROR_CORRUPT && disk.writes == 0);
 
     fresh();
-    for (i = 0; i < AL_CAPACITY; ++i)
+    for (i = 0; i < ALARM_CAPACITY; ++i)
     {
-        assert(al_store_enqueue(&queue, &event, &id) == AL_OK);
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
     }
     writes = disk.writes;
-    assert(al_store_enqueue(&queue, &event, &id) == AL_ERR_FULL);
-    assert(disk.writes == writes && queue.image.count == AL_CAPACITY);
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_ERROR_FULL);
+    assert(disk.writes == writes && queue.image.count == ALARM_CAPACITY);
     disk.write_mode = 1;
-    assert(al_store_remove(&queue, queue.image.events[0].id) == AL_ERR_STORAGE);
-    assert(queue.image.count == AL_CAPACITY);
+    assert(alarm_store_remove(&queue, queue.image.events[0].id) == ALARM_ERROR_STORAGE);
+    assert(queue.image.count == ALARM_CAPACITY);
     disk.write_mode = 0;
-    assert(open_queue() == AL_OK && queue.image.count == AL_CAPACITY);
+    assert(open_queue() == ALARM_OK && queue.image.count == ALARM_CAPACITY);
     puts("snapshot: blank, recovery, foreign, read/short-write/sync/verify faults, full, delete "
          "failure OK");
     return 0;

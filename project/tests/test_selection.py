@@ -51,11 +51,14 @@ class ProductSelectionTests(unittest.TestCase):
             for resource in ("UART:0", "PIN:17", "PIN:18"):
                 self.assertIn(resource, spec["resources"])
         startup = (ROOT / "project/src/ml307y/product_start.c").read_text(encoding="utf-8")
+        initialize = startup.split("static bool product_boot_initialize(void)", 1)[1]
+        initialize = initialize.split("static void product_boot_task(void *argument)", 1)[0]
         boot = startup.split("static void product_boot_task(void *argument)", 1)[1]
         boot = boot.split("int cm_opencpu_entry(void *param)", 1)[0]
-        init = boot.find("ml_uart_diag_init()")
-        ready = boot.find("UART0 ready")
-        base_check = boot.find("project_base_identity()")
+        self.assertIn("product_boot_initialize()", boot)
+        init = initialize.find("ml307y_uart_diag_init()")
+        ready = initialize.find("UART0 ready")
+        base_check = initialize.find("project_base_identity()")
         self.assertGreaterEqual(init, 0)
         self.assertGreater(ready, init)
         self.assertGreater(base_check, ready)

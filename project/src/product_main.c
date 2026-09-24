@@ -1,5 +1,5 @@
 /*------------------------------------------includes--------------------------------------------*/
-#include "product_if.h"
+#include "product_interface.h"
 
 /*-------------------------------------------define---------------------------------------------*/
 /*-------------------------------------------typedef---------------------------------------------*/
@@ -25,11 +25,12 @@ bool template_board_prepare(product_services_t *services)
 * Description    : 模板产品独立入口，仅用于验证构建和链接隔离
 * Input          : services - 已注入的服务
 * Output         : 一条诊断
-* Return         : 无
+* Return         : true - 模板入口已运行
 * Attention      : 不启动报警任务、不使用报警存储或网络
 *******************************************************************************/
-void template_product_start(product_services_t *services)
+bool template_product_start(product_services_t *services)
 {
     /* 诊断回调由产品外部注入，模板不会创建业务任务。 */
     services->system.fault("template-test-started", 0);
+    return true;
 }

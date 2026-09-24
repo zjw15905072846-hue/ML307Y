@@ -1,57 +1,57 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "ml307y/ml307y_port.h"
-#include "mqtt/kw_cloud.h"
+#include "mqtt/kaiwan_cloud.h"
 #include "mqtt/mqtt_config.h"
-#include "mqtt/mqtt_rx.h"
+#include "mqtt/mqtt_receive.h"
 #include "cm_mqtt.h"
 #include "cm_modem.h"
 #include "cm_ssl.h"
 #include "cm_os.h"
-#include <stdlib.h>
+#include "cm_mem.h"
 #include <string.h>
 /*-------------------------------------------define---------------------------------------------*/
-#define ML_MQTT_EVENTS 24 /* SDK 回调投递到后台的事件队列容量。 */
+#define ML307Y_MQTT_EVENTS 24 /* SDK 回调投递到后台的事件队列容量。 */
 
 /*-------------------------------------------typedef---------------------------------------------*/
-/* 供应商回调只产生事件，状态机统一在 ml_poll 中推进。 */
+/* 供应商回调只产生事件，状态机统一在 ml307y_poll 中推进。 */
 typedef enum
 {
-    ML_CONNECTION, /* 连接状态变化。 */
-    ML_SUBSCRIBED, /* 下行 Topic 订阅确认。 */
-    ML_PUBLISHED,  /* MQTT 传输确认。 */
-    ML_TIMEOUT,    /* 包级超时。 */
-    ML_RECEIVED    /* 下行消息分段。 */
-} ml_mqtt_event_kind_t;
+    ML307Y_CONNECTION, /* 连接状态变化。 */
+    ML307Y_SUBSCRIBED, /* 下行 Topic 订阅确认。 */
+    ML307Y_PUBLISHED,  /* MQTT 传输确认。 */
+    ML307Y_TIMEOUT,    /* 包级超时。 */
+    ML307Y_RECEIVED    /* 下行消息分段。 */
+} ml307y_mqtt_event_kind_t;
 
 typedef struct
 {
-    ml_mqtt_event_kind_t kind;
+    ml307y_mqtt_event_kind_t kind;
     uint32_t generation; /* 回调产生时的连接代数，旧连接事件会被丢弃。 */
     int result;
     uint16_t id;
     size_t total;
     size_t length;
-    char topic[KW_CLOUD_TOPIC_SIZE];
+    char topic[KAIWAN_CLOUD_TOPIC_SIZE];
     uint8_t *payload; /* 回调里复制的分段，由后台消费后释放。 */
-} ml_mqtt_event_t;
+} ml307y_mqtt_event_t;
 
 typedef struct
 {
-    kw_transport_t interface;
-    system_if_t *system;
+    kaiwan_transport_t interface;
+    system_interface_t *system;
     cm_mqtt_client_t *client;
     osMessageQueueId_t events;
-    kw_cloud_config_t config;
-    kw_cloud_callbacks_t callbacks;
+    kaiwan_cloud_config_t config;
+    kaiwan_cloud_callbacks_t callbacks;
     cm_mqtt_connect_options_t options;
     cm_mqtt_client_cb_t sdk_callbacks;
-    mqtt_rx_t rx;
+    mqtt_receive_state_t receive;
     uint32_t callback_generation; /* SDK 回调侧的连接代数。 */
     uint32_t generation;          /* 后台当前接受的连接代数。 */
     uint32_t callback_error;      /* 队列溢出或复制失败标志。 */
     uint32_t next_connect;
     uint32_t phase_started;
-    uint32_t tx_started;
+    uint32_t transmit_started;
     uint32_t cookie;
     uint16_t subscription_id;
     uint16_t publish_id;
@@ -60,52 +60,52 @@ typedef struct
     bool connecting;
     bool subscribed;
     bool publishing;
-    uint8_t *tx_payload; /* 唯一在途消息的深拷贝，传输结束后释放。 */
-    char tx_topic[KW_CLOUD_TOPIC_SIZE];
-} ml_mqtt_t;
+    uint8_t *transmit_payload; /* 唯一在途消息的深拷贝，传输结束后释放。 */
+    char transmit_topic[KAIWAN_CLOUD_TOPIC_SIZE];
+} ml307y_mqtt_state_t;
 
 /*-------------------------------------------variables-------------------------------------------*/
 /* 仅将 SDK 客户端指针映射到寿命稳定的独立上下文。 */
-static ml_mqtt_t *s_clients[CM_MQTT_CLIENT_MAX];
+static ml307y_mqtt_state_t *mqtt_clients[CM_MQTT_CLIENT_MAX];
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
-* Function Name  : ml_lookup
+* Function Name  : ml307y_lookup
 * Description    : 从SDK客户端定位独立传输上下文
 * Input          : client - SDK客户端
 * Output         : 无
 * Return         : 对应上下文或NULL
 * Attention      : 上下文在固件运行期间不释放，避免异步销毁悬空
 *******************************************************************************/
-static ml_mqtt_t *ml_lookup(cm_mqtt_client_t *client)
+static ml307y_mqtt_state_t *ml307y_lookup(cm_mqtt_client_t *client)
 {
-    unsigned i;
-    for (i = 0; i < CM_MQTT_CLIENT_MAX; ++i)
+    unsigned index;
+    for (index = 0; index < CM_MQTT_CLIENT_MAX; ++index)
     {
-        if (s_clients[i] && s_clients[i]->client == client)
+        if (mqtt_clients[index] && mqtt_clients[index]->client == client)
         {
-            return s_clients[i];
+            return mqtt_clients[index];
         }
     }
     return NULL;
 }
 
 /*******************************************************************************
-* Function Name  : ml_post
+* Function Name  : ml307y_post
 * Description    : 将SDK事件非阻塞投递到所属后台任务
-* Input          : m - 客户端；event - 已复制数据
+* Input          : mqtt_state - 客户端；event - 已复制数据
 * Output         : 事件队列或错误标记
 * Return         : 0成功；-1失败
 * Attention      : 失败时释放接收缓冲，不生成业务确认
 *******************************************************************************/
-static int ml_post(ml_mqtt_t *m, ml_mqtt_event_t *event)
+static int ml307y_post(ml307y_mqtt_state_t *mqtt_state, ml307y_mqtt_event_t *event)
 {
-    if (!m || osMessageQueuePut(m->events, event, 0, 0) != osOK)
+    if (!mqtt_state || osMessageQueuePut(mqtt_state->events, event, 0, 0) != osOK)
     {
-        free(event->payload);
-        if (m)
+        cm_free(event->payload);
+        if (mqtt_state)
         {
-            __atomic_store_n(&m->callback_error, 1U, __ATOMIC_RELEASE);
+            __atomic_store_n(&mqtt_state->callback_error, 1U, __ATOMIC_RELEASE);
         }
         return -1;
     }
@@ -113,129 +113,129 @@ static int ml_post(ml_mqtt_t *m, ml_mqtt_event_t *event)
 }
 
 /*******************************************************************************
-* Function Name  : ml_connection_cb
+* Function Name  : ml307y_connection_callback
 * Description    : 捕获连接变化并标注回调代数
 * Input          : client - SDK客户端；session - 保留；result - 连接状态
 * Output         : 后台连接事件
 * Return         : 投递状态
 * Attention      : SDK回调中不执行产品业务或存储
 *******************************************************************************/
-static int ml_connection_cb(cm_mqtt_client_t *client, int session, int result)
+static int ml307y_connection_callback(cm_mqtt_client_t *client, int session, int result)
 {
-    ml_mqtt_t *m = ml_lookup(client);
-    ml_mqtt_event_t event = {0};
+    ml307y_mqtt_state_t *mqtt_state = ml307y_lookup(client);
+    ml307y_mqtt_event_t event = {0};
     (void)session;
-    if (!m)
+    if (!mqtt_state)
     {
         return -1;
     }
-    event.kind = ML_CONNECTION;
+    event.kind = ML307Y_CONNECTION;
     event.result = result;
-    event.generation = __atomic_add_fetch(&m->callback_generation, 1U, __ATOMIC_ACQ_REL);
-    return ml_post(m, &event);
+    event.generation = __atomic_add_fetch(&mqtt_state->callback_generation, 1U, __ATOMIC_ACQ_REL);
+    return ml307y_post(mqtt_state, &event);
 }
 
 /*******************************************************************************
-* Function Name  : ml_subscribed_cb
+* Function Name  : ml307y_subscribed_callback
 * Description    : 复制订阅确认，不提前声明在线
 * Input          : client - 客户端；id - 包编号；count/qos - 结果
 * Output         : 订阅事件
 * Return         : 投递状态
 * Attention      : 只有全部主题订阅成功才上线
 *******************************************************************************/
-static int ml_subscribed_cb(cm_mqtt_client_t *client, unsigned short id, int count, int qos[])
+static int ml307y_subscribed_callback(cm_mqtt_client_t *client, unsigned short id, int count, int qos[])
 {
-    ml_mqtt_t *m = ml_lookup(client);
-    ml_mqtt_event_t event = {0};
-    if (!m)
+    ml307y_mqtt_state_t *mqtt_state = ml307y_lookup(client);
+    ml307y_mqtt_event_t event = {0};
+    if (!mqtt_state)
     {
         return -1;
     }
-    event.kind = ML_SUBSCRIBED;
+    event.kind = ML307Y_SUBSCRIBED;
     event.id = id;
-    event.generation = __atomic_load_n(&m->callback_generation, __ATOMIC_ACQUIRE);
+    event.generation = __atomic_load_n(&mqtt_state->callback_generation, __ATOMIC_ACQUIRE);
     event.result = count == 1 && qos && qos[0] >= 0 && qos[0] <= 2 ? 0 : -1;
-    return ml_post(m, &event);
+    return ml307y_post(mqtt_state, &event);
 }
 
 /*******************************************************************************
-* Function Name  : ml_published_cb
+* Function Name  : ml307y_published_callback
 * Description    : 捕获MQTT PUBACK用于传输结果
 * Input          : client - 客户端；id - 包编号；dup - 重复标记
 * Output         : 传输事件
 * Return         : 投递状态
 * Attention      : 不删除报警记录
 *******************************************************************************/
-static int ml_published_cb(cm_mqtt_client_t *client, unsigned short id, char dup)
+static int ml307y_published_callback(cm_mqtt_client_t *client, unsigned short id, char dup)
 {
-    ml_mqtt_t *m = ml_lookup(client);
-    ml_mqtt_event_t event = {0};
+    ml307y_mqtt_state_t *mqtt_state = ml307y_lookup(client);
+    ml307y_mqtt_event_t event = {0};
     (void)dup;
-    if (!m)
+    if (!mqtt_state)
     {
         return -1;
     }
-    event.kind = ML_PUBLISHED;
+    event.kind = ML307Y_PUBLISHED;
     event.id = id;
-    event.generation = __atomic_load_n(&m->callback_generation, __ATOMIC_ACQUIRE);
-    return ml_post(m, &event);
+    event.generation = __atomic_load_n(&mqtt_state->callback_generation, __ATOMIC_ACQUIRE);
+    return ml307y_post(mqtt_state, &event);
 }
 
 /*******************************************************************************
-* Function Name  : ml_timeout_cb
+* Function Name  : ml307y_timeout_cb
 * Description    : 捕获SDK报文超时
 * Input          : client - 客户端；id - 包编号
 * Output         : 后台超时事件
 * Return         : 投递状态
 * Attention      : 由后台按当前连接及包编号判断
 *******************************************************************************/
-static int ml_timeout_cb(cm_mqtt_client_t *client, unsigned short id)
+static int ml307y_timeout_cb(cm_mqtt_client_t *client, unsigned short id)
 {
-    ml_mqtt_t *m = ml_lookup(client);
-    ml_mqtt_event_t event = {0};
-    if (!m)
+    ml307y_mqtt_state_t *mqtt_state = ml307y_lookup(client);
+    ml307y_mqtt_event_t event = {0};
+    if (!mqtt_state)
     {
         return -1;
     }
-    event.kind = ML_TIMEOUT;
+    event.kind = ML307Y_TIMEOUT;
     event.id = id;
-    event.generation = __atomic_load_n(&m->callback_generation, __ATOMIC_ACQUIRE);
-    return ml_post(m, &event);
+    event.generation = __atomic_load_n(&mqtt_state->callback_generation, __ATOMIC_ACQUIRE);
+    return ml307y_post(mqtt_state, &event);
 }
 
 /*******************************************************************************
-* Function Name  : ml_receive_cb
+* Function Name  : ml307y_receive_callback
 * Description    : 在SDK缓冲有效期内复制受限分段数据
 * Input          : client/id/topic - 消息身份；total/length - 长度；payload - 内容
 * Output         : 拥有独立缓冲的接收事件
 * Return         : 0已排队；-1拒绝
 * Attention      : 不解析未完整的铠湾回执
 *******************************************************************************/
-static int ml_receive_cb(cm_mqtt_client_t *client, unsigned short id, char *topic, int total,
+static int ml307y_receive_callback(cm_mqtt_client_t *client, unsigned short id, char *topic, int total,
                          int length, char *payload)
 {
-    ml_mqtt_t *m = ml_lookup(client);
-    ml_mqtt_event_t event = {0};
+    ml307y_mqtt_state_t *mqtt_state = ml307y_lookup(client);
+    ml307y_mqtt_event_t event = {0};
     size_t topic_length = 0;
-    if (!m)
+    if (!mqtt_state)
     {
         return -1;
     }
-    if (total <= 0 || length <= 0 || length > total || total > (int)KW_CLOUD_MAX_PAYLOAD_SIZE ||
-        !payload || (topic && !kw_cloud_text_length(topic, sizeof(event.topic), &topic_length)))
+    if (total <= 0 || length <= 0 || length > total || total > (int)KAIWAN_CLOUD_MAXIMUM_PAYLOAD_SIZE ||
+        !payload || (topic && !kaiwan_cloud_text_length(topic, sizeof(event.topic), &topic_length)))
     {
-        __atomic_store_n(&m->callback_error, 1U, __ATOMIC_RELEASE);
+        __atomic_store_n(&mqtt_state->callback_error, 1U, __ATOMIC_RELEASE);
         return -1;
     }
     /* SDK 回调缓冲只在本次调用有效，分段必须复制后入队。 */
-    event.payload = malloc((size_t)length);
+    event.payload = cm_malloc((size_t)length);
     if (!event.payload)
     {
-        __atomic_store_n(&m->callback_error, 1U, __ATOMIC_RELEASE);
+        __atomic_store_n(&mqtt_state->callback_error, 1U, __ATOMIC_RELEASE);
         return -1;
     }
-    event.kind = ML_RECEIVED;
-    event.generation = __atomic_load_n(&m->callback_generation, __ATOMIC_ACQUIRE);
+    event.kind = ML307Y_RECEIVED;
+    event.generation = __atomic_load_n(&mqtt_state->callback_generation, __ATOMIC_ACQUIRE);
     event.id = id;
     event.total = (size_t)total;
     event.length = (size_t)length;
@@ -244,95 +244,95 @@ static int ml_receive_cb(cm_mqtt_client_t *client, unsigned short id, char *topi
         memcpy(event.topic, topic, topic_length + 1);
     }
     memcpy(event.payload, payload, (size_t)length);
-    return ml_post(m, &event);
+    return ml307y_post(mqtt_state, &event);
 }
 
 /*******************************************************************************
-* Function Name  : ml_tx_done
+* Function Name  : ml307y_transmit_done
 * Description    : 完成一次传输回调并释放发送副本
-* Input          : m - 传输上下文；result - 传输结果
+* Input          : mqtt_state - 传输上下文；result - 传输结果
 * Output         : 清除发送占用并通知调用方
 * Return         : 无
 * Attention      : 该结果不是平台业务确认
 *******************************************************************************/
-static void ml_tx_done(ml_mqtt_t *m, kw_cloud_result_t result)
+static void ml307y_transmit_done(ml307y_mqtt_state_t *mqtt_state, kaiwan_cloud_result_t result)
 {
-    uint32_t cookie = m->cookie;
-    if (!m->publishing)
+    uint32_t cookie = mqtt_state->cookie;
+    if (!mqtt_state->publishing)
     {
         return;
     }
-    m->publishing = false;
-    free(m->tx_payload);
-    m->tx_payload = NULL;
-    if (m->callbacks.on_publish_result)
+    mqtt_state->publishing = false;
+    cm_free(mqtt_state->transmit_payload);
+    mqtt_state->transmit_payload = NULL;
+    if (mqtt_state->callbacks.on_publish_result)
     {
-        m->callbacks.on_publish_result(cookie, result, m->callbacks.user);
+        mqtt_state->callbacks.on_publish_result(cookie, result, mqtt_state->callbacks.user);
     }
 }
 
 /*******************************************************************************
-* Function Name  : ml_offline
+* Function Name  : ml307y_offline
 * Description    : 撤销上线状态并终止本连接发送占用
-* Input          : m - 上下文
+* Input          : mqtt_state - 上下文
 * Output         : 连接和组包状态
 * Return         : 无
 * Attention      : 未确认报警由产品保留重试
 *******************************************************************************/
-static void ml_offline(ml_mqtt_t *m)
+static void ml307y_offline(ml307y_mqtt_state_t *mqtt_state)
 {
-    bool was_online = m->subscribed;
-    m->subscribed = false;
-    m->connecting = false;
-    m->subscription_id = 0;
-    mqtt_rx_reset(&m->rx, m->generation);
-    ml_tx_done(m, KW_CLOUD_ERR_NETWORK);
-    if (was_online && m->callbacks.on_state_changed)
+    bool was_online = mqtt_state->subscribed;
+    mqtt_state->subscribed = false;
+    mqtt_state->connecting = false;
+    mqtt_state->subscription_id = 0;
+    mqtt_receive_reset(&mqtt_state->receive, mqtt_state->generation);
+    ml307y_transmit_done(mqtt_state, KAIWAN_CLOUD_ERROR_NETWORK);
+    if (was_online && mqtt_state->callbacks.on_state_changed)
     {
-        m->callbacks.on_state_changed(false, m->callbacks.user);
+        mqtt_state->callbacks.on_state_changed(false, mqtt_state->callbacks.user);
     }
 }
 
 /*******************************************************************************
-* Function Name  : ml_start
+* Function Name  : ml307y_start
 * Description    : 保存配置并请求连接，SDK客户端在上下文寿命内复用
 * Input          : user - 传输；config - 配置；callbacks - 业务回调
 * Output         : 异步连接请求
-* Return         : KW_CLOUD状态码
+* Return         : KAIWAN_CLOUD状态码
 * Attention      : 目前QoS1；凭据不写入日志
 *******************************************************************************/
-static kw_cloud_result_t ml_start(void *user, const kw_cloud_config_t *config,
-                                  const kw_cloud_callbacks_t *callbacks)
+static kaiwan_cloud_result_t ml307y_start(void *user, const kaiwan_cloud_config_t *config,
+                                  const kaiwan_cloud_callbacks_t *callbacks)
 {
-    ml_mqtt_t *m = user;
+    ml307y_mqtt_state_t *mqtt_state = user;
     int enabled;
     int channel;
     uint8_t yes = 1;
     uint8_t no = 0;
     uint8_t version = 255;
-    const kw_tls_config_t *tls;
-    if (!m || !callbacks || kw_cloud_validate_config(config) != KW_CLOUD_OK || config->qos != 1 ||
-        config->peer_rx_topic[0])
+    const kaiwan_tls_config_t *tls;
+    if (!mqtt_state || !callbacks || kaiwan_cloud_validate_config(config) != KAIWAN_CLOUD_OK || config->qos != 1 ||
+        config->peer_receive_topic[0])
     {
-        return KW_CLOUD_ERR_CONFIG;
+        return KAIWAN_CLOUD_ERROR_CONFIG;
     }
-    if (m->wanted)
+    if (mqtt_state->wanted)
     {
-        return KW_CLOUD_ERR_STATE;
+        return KAIWAN_CLOUD_ERROR_STATE;
     }
-    m->config = *config;
-    m->callbacks = *callbacks;
+    mqtt_state->config = *config;
+    mqtt_state->callbacks = *callbacks;
     enabled = config->use_tls ? 1 : 0;
-    if (cm_mqtt_client_set_opt(m->client, CM_MQTT_OPT_SSL_ENABLE, &enabled) != 0)
+    if (cm_mqtt_client_set_opt(mqtt_state->client, CM_MQTT_OPT_SSL_ENABLE, &enabled) != 0)
     {
-        return KW_CLOUD_ERR_CONFIG;
+        return KAIWAN_CLOUD_ERROR_CONFIG;
     }
     if (enabled)
     {
         tls = config->tls_config;
         if (!tls || tls->channel >= 6 || !tls->ca_file || !tls->ca_file[0])
         {
-            return KW_CLOUD_ERR_CONFIG;
+            return KAIWAN_CLOUD_ERROR_CONFIG;
         }
         channel = (int)tls->channel;
         if (cm_ssl_setopt(channel, CM_SSL_PARAM_VERIFY, &yes) != 0 ||
@@ -341,291 +341,291 @@ static kw_cloud_result_t ml_start(void *user, const kw_cloud_config_t *config,
             cm_ssl_setopt(channel, CM_SSL_PARAM_IGNORE_VERIFY, &no) != 0 ||
             cm_ssl_setopt(channel, CM_SSL_PARAM_SNI, &yes) != 0 ||
             cm_ssl_setopt(channel, CM_SSL_PARAM_CA_CERT_FILENAME, (void *)tls->ca_file) != 0 ||
-            cm_mqtt_client_set_opt(m->client, CM_MQTT_OPT_SSL_ID, &channel) != 0)
+            cm_mqtt_client_set_opt(mqtt_state->client, CM_MQTT_OPT_SSL_ID, &channel) != 0)
         {
-            return KW_CLOUD_ERR_CONFIG;
+            return KAIWAN_CLOUD_ERROR_CONFIG;
         }
     }
-    memset(&m->options, 0, sizeof(m->options));
-    m->options.hostname = m->config.broker_host;
-    m->options.hostport = m->config.broker_port;
-    m->options.clientid = m->config.client_id;
-    m->options.username = m->config.username;
-    m->options.password = m->config.password;
-    m->options.keepalive = m->config.keepalive_seconds;
-    m->options.clean_session = m->config.clean_session;
-    m->configured = true;
-    m->wanted = true;
-    m->next_connect = m->system->millis(m->system->user);
-    return KW_CLOUD_OK;
+    memset(&mqtt_state->options, 0, sizeof(mqtt_state->options));
+    mqtt_state->options.hostname = mqtt_state->config.broker_host;
+    mqtt_state->options.hostport = mqtt_state->config.broker_port;
+    mqtt_state->options.clientid = mqtt_state->config.client_id;
+    mqtt_state->options.username = mqtt_state->config.username;
+    mqtt_state->options.password = mqtt_state->config.password;
+    mqtt_state->options.keepalive = mqtt_state->config.keepalive_seconds;
+    mqtt_state->options.clean_session = mqtt_state->config.clean_session;
+    mqtt_state->configured = true;
+    mqtt_state->wanted = true;
+    mqtt_state->next_connect = mqtt_state->system->millis(mqtt_state->system->user);
+    return KAIWAN_CLOUD_OK;
 }
 
 /*******************************************************************************
-* Function Name  : ml_online
+* Function Name  : ml307y_online
 * Description    : 查询完成订阅后的在线状态
 * Input          : user - 传输上下文
 * Output         : 无
 * Return         : true允许业务发送
 * Attention      : 连接成功但未收到SUBACK时为false
 *******************************************************************************/
-static bool ml_online(void *user)
+static bool ml307y_online(void *user)
 {
-    return ((ml_mqtt_t *)user)->subscribed;
+    return ((ml307y_mqtt_state_t *)user)->subscribed;
 }
 
 /*******************************************************************************
-* Function Name  : ml_publish
+* Function Name  : ml307y_publish
 * Description    : 复制数据并提交唯一在途QoS1消息
 * Input          : user - 传输；topic/payload/size - 报文；qos/retained - 选项；cookie - 关联
 * Output         : 保存发送副本
-* Return         : KW_CLOUD状态码
+* Return         : KAIWAN_CLOUD状态码
 * Attention      : 业务回执由产品独立判断
 *******************************************************************************/
-static kw_cloud_result_t ml_publish(void *user, const char *topic, const uint8_t *payload,
+static kaiwan_cloud_result_t ml307y_publish(void *user, const char *topic, const uint8_t *payload,
                                     size_t size, uint8_t qos, bool retained, uint32_t cookie)
 {
-    ml_mqtt_t *m = user;
+    ml307y_mqtt_state_t *mqtt_state = user;
     size_t topic_length;
     int result;
-    if (!m->subscribed)
+    if (!mqtt_state->subscribed)
     {
-        return KW_CLOUD_ERR_STATE;
+        return KAIWAN_CLOUD_ERROR_STATE;
     }
-    if (m->publishing)
+    if (mqtt_state->publishing)
     {
-        return KW_CLOUD_ERR_QUEUE;
+        return KAIWAN_CLOUD_ERROR_QUEUE;
     }
-    if (!payload || !size || size > KW_CLOUD_MAX_PAYLOAD_SIZE || qos != 1 ||
-        !kw_cloud_text_length(topic, sizeof(m->tx_topic), &topic_length) || !topic_length ||
+    if (!payload || !size || size > KAIWAN_CLOUD_MAXIMUM_PAYLOAD_SIZE || qos != 1 ||
+        !kaiwan_cloud_text_length(topic, sizeof(mqtt_state->transmit_topic), &topic_length) || !topic_length ||
         topic_length + size + 16 >= 4096)
     {
-        return KW_CLOUD_ERR_ARGUMENT;
+        return KAIWAN_CLOUD_ERROR_ARGUMENT;
     }
-    m->tx_payload = malloc(size);
-    if (!m->tx_payload)
+    mqtt_state->transmit_payload = cm_malloc(size);
+    if (!mqtt_state->transmit_payload)
     {
-        return KW_CLOUD_ERR_MEMORY;
+        return KAIWAN_CLOUD_ERROR_MEMORY;
     }
-    memcpy(m->tx_payload, payload, size);
-    memcpy(m->tx_topic, topic, topic_length + 1);
-    m->cookie = cookie;
-    m->publishing = true;
-    m->tx_started = m->system->millis(m->system->user);
-    result = cm_mqtt_client_publish(m->client, m->tx_topic, (const char *)m->tx_payload, (int)size,
+    memcpy(mqtt_state->transmit_payload, payload, size);
+    memcpy(mqtt_state->transmit_topic, topic, topic_length + 1);
+    mqtt_state->cookie = cookie;
+    mqtt_state->publishing = true;
+    mqtt_state->transmit_started = mqtt_state->system->millis(mqtt_state->system->user);
+    result = cm_mqtt_client_publish(mqtt_state->client, mqtt_state->transmit_topic, (const char *)mqtt_state->transmit_payload, (int)size,
                                     CM_MQTT_QOS_1 | (retained ? CM_MQTT_RETAIN_1 : 0));
     if (result < 0)
     {
-        ml_tx_done(m, KW_CLOUD_ERR_MQTT);
-        return KW_CLOUD_ERR_MQTT;
+        ml307y_transmit_done(mqtt_state, KAIWAN_CLOUD_ERROR_MQTT);
+        return KAIWAN_CLOUD_ERROR_MQTT;
     }
-    result = cm_mqtt_client_get_msgid(m->client);
+    result = cm_mqtt_client_get_msgid(mqtt_state->client);
     if (result <= 0)
     {
-        ml_tx_done(m, KW_CLOUD_ERR_MQTT);
-        return KW_CLOUD_ERR_MQTT;
+        ml307y_transmit_done(mqtt_state, KAIWAN_CLOUD_ERROR_MQTT);
+        return KAIWAN_CLOUD_ERROR_MQTT;
     }
-    m->publish_id = (uint16_t)result;
-    return KW_CLOUD_OK;
+    mqtt_state->publish_id = (uint16_t)result;
+    return KAIWAN_CLOUD_OK;
 }
 
 /*******************************************************************************
-* Function Name  : ml_poll
+* Function Name  : ml307y_poll
 * Description    : 串行分派有限回调并推进连接订阅及超时
 * Input          : user - 传输上下文；now - 单调毫秒
 * Output         : 连接状态及用户回调
 * Return         : 无
 * Attention      : 仅后台调用；旧代数事件一律释放丢弃
 *******************************************************************************/
-static void ml_poll(void *user, uint32_t now)
+static void ml307y_poll(void *user, uint32_t now)
 {
-    ml_mqtt_t *m = user;
-    ml_mqtt_event_t event;
+    ml307y_mqtt_state_t *mqtt_state = user;
+    ml307y_mqtt_event_t event;
     unsigned count;
     int result;
     const char *topic;
     char qos = 1;
-    if (__atomic_exchange_n(&m->callback_error, 0U, __ATOMIC_ACQ_REL))
+    if (__atomic_exchange_n(&mqtt_state->callback_error, 0U, __ATOMIC_ACQ_REL))
     {
         /* 回调队列出错时，先使旧事件代数失效，再请求异步断开。 */
-        m->generation = __atomic_add_fetch(&m->callback_generation, 1U, __ATOMIC_ACQ_REL);
-        m->next_connect = now + m->config.reconnect_min_ms;
-        ml_offline(m);
-        (void)cm_mqtt_client_disconnect(m->client);
-        m->system->fault("mqtt-callback-queue", KW_CLOUD_ERR_QUEUE);
+        mqtt_state->generation = __atomic_add_fetch(&mqtt_state->callback_generation, 1U, __ATOMIC_ACQ_REL);
+        mqtt_state->next_connect = now + mqtt_state->config.reconnect_minimum_ms;
+        ml307y_offline(mqtt_state);
+        (void)cm_mqtt_client_disconnect(mqtt_state->client);
+        mqtt_state->system->fault("mqtt-callback-queue", KAIWAN_CLOUD_ERROR_QUEUE);
     }
-    for (count = 0; count < 8 && osMessageQueueGet(m->events, &event, NULL, 0) == osOK; ++count)
+    for (count = 0; count < 8 && osMessageQueueGet(mqtt_state->events, &event, NULL, 0) == osOK; ++count)
     {
-        if (event.generation != __atomic_load_n(&m->callback_generation, __ATOMIC_ACQUIRE))
+        if (event.generation != __atomic_load_n(&mqtt_state->callback_generation, __ATOMIC_ACQUIRE))
         {
-            free(event.payload);
+            cm_free(event.payload);
             continue;
         }
-        if (event.kind == ML_CONNECTION)
+        if (event.kind == ML307Y_CONNECTION)
         {
-            m->generation = event.generation;
-            ml_offline(m);
-            m->next_connect = now + m->config.reconnect_min_ms;
-            if (m->wanted && event.result == 0)
+            mqtt_state->generation = event.generation;
+            ml307y_offline(mqtt_state);
+            mqtt_state->next_connect = now + mqtt_state->config.reconnect_minimum_ms;
+            if (mqtt_state->wanted && event.result == 0)
             {
-                topic = m->config.platform_down_topic;
-                result = cm_mqtt_client_subscribe(m->client, &topic, &qos, 1);
+                topic = mqtt_state->config.platform_down_topic;
+                result = cm_mqtt_client_subscribe(mqtt_state->client, &topic, &qos, 1);
                 if (result >= 0)
                 {
-                    m->subscription_id = (uint16_t)cm_mqtt_client_get_msgid(m->client);
-                    m->connecting = true;
-                    m->phase_started = now;
+                    mqtt_state->subscription_id = (uint16_t)cm_mqtt_client_get_msgid(mqtt_state->client);
+                    mqtt_state->connecting = true;
+                    mqtt_state->phase_started = now;
                 }
                 else
                 {
-                    (void)cm_mqtt_client_disconnect(m->client);
+                    (void)cm_mqtt_client_disconnect(mqtt_state->client);
                 }
             }
         }
-        else if (event.generation == m->generation && m->wanted)
+        else if (event.generation == mqtt_state->generation && mqtt_state->wanted)
         {
-            if (event.kind == ML_SUBSCRIBED && m->connecting && event.id == m->subscription_id)
+            if (event.kind == ML307Y_SUBSCRIBED && mqtt_state->connecting && event.id == mqtt_state->subscription_id)
             {
-                if (event.result == 0 && !m->subscribed)
+                if (event.result == 0 && !mqtt_state->subscribed)
                 {
-                    m->subscribed = true;
-                    m->connecting = false;
-                    if (m->callbacks.on_state_changed)
+                    mqtt_state->subscribed = true;
+                    mqtt_state->connecting = false;
+                    if (mqtt_state->callbacks.on_state_changed)
                     {
-                        m->callbacks.on_state_changed(true, m->callbacks.user);
+                        mqtt_state->callbacks.on_state_changed(true, mqtt_state->callbacks.user);
                     }
                 }
                 else if (event.result != 0)
                 {
-                    ml_offline(m);
-                    (void)cm_mqtt_client_disconnect(m->client);
+                    ml307y_offline(mqtt_state);
+                    (void)cm_mqtt_client_disconnect(mqtt_state->client);
                 }
             }
-            else if ((event.kind == ML_PUBLISHED || event.kind == ML_TIMEOUT) && m->publishing &&
-                     event.id == m->publish_id)
+            else if ((event.kind == ML307Y_PUBLISHED || event.kind == ML307Y_TIMEOUT) && mqtt_state->publishing &&
+                     event.id == mqtt_state->publish_id)
             {
-                ml_tx_done(m, event.kind == ML_PUBLISHED ? KW_CLOUD_OK : KW_CLOUD_ERR_MQTT);
+                ml307y_transmit_done(mqtt_state, event.kind == ML307Y_PUBLISHED ? KAIWAN_CLOUD_OK : KAIWAN_CLOUD_ERROR_MQTT);
             }
-            else if (event.kind == ML_RECEIVED && m->subscribed)
+            else if (event.kind == ML307Y_RECEIVED && mqtt_state->subscribed)
             {
-                result = mqtt_rx_feed(&m->rx, event.generation, event.id,
+                result = mqtt_receive_feed(&mqtt_state->receive, event.generation, event.id,
                                       event.topic[0] ? event.topic : NULL, event.total,
                                       event.payload, event.length);
                 /* 只将完整组装的下行负载交给产品解析。 */
-                if (result == MQTT_RX_COMPLETE && m->callbacks.on_message)
+                if (result == MQTT_RECEIVE_COMPLETE && mqtt_state->callbacks.on_message)
                 {
-                    result = m->callbacks.on_message(m->rx.topic, strlen(m->rx.topic),
-                                                     m->rx.payload, m->rx.total, m->callbacks.user);
+                    result = mqtt_state->callbacks.on_message(mqtt_state->receive.topic, strlen(mqtt_state->receive.topic),
+                                                     mqtt_state->receive.payload, mqtt_state->receive.total, mqtt_state->callbacks.user);
                 }
-                if (result < 0 && m->callbacks.on_receive_error)
+                if (result < 0 && mqtt_state->callbacks.on_receive_error)
                 {
-                    m->callbacks.on_receive_error(KW_CLOUD_ERR_MQTT, m->callbacks.user);
+                    mqtt_state->callbacks.on_receive_error(KAIWAN_CLOUD_ERROR_MQTT, mqtt_state->callbacks.user);
                 }
             }
         }
-        free(event.payload);
+        cm_free(event.payload);
     }
-    if (m->publishing && (uint32_t)(now - m->tx_started) >= m->config.command_timeout_ms)
+    if (mqtt_state->publishing && (uint32_t)(now - mqtt_state->transmit_started) >= mqtt_state->config.command_timeout_ms)
     {
-        ml_tx_done(m, KW_CLOUD_ERR_MQTT);
+        ml307y_transmit_done(mqtt_state, KAIWAN_CLOUD_ERROR_MQTT);
     }
-    if (m->connecting && (uint32_t)(now - m->phase_started) >= m->config.command_timeout_ms)
+    if (mqtt_state->connecting && (uint32_t)(now - mqtt_state->phase_started) >= mqtt_state->config.command_timeout_ms)
     {
-        ml_offline(m);
-        (void)cm_mqtt_client_disconnect(m->client);
-        m->next_connect = now + m->config.reconnect_min_ms;
+        ml307y_offline(mqtt_state);
+        (void)cm_mqtt_client_disconnect(mqtt_state->client);
+        mqtt_state->next_connect = now + mqtt_state->config.reconnect_minimum_ms;
     }
-    if (m->wanted && !m->subscribed && !m->connecting && (int32_t)(now - m->next_connect) >= 0 &&
-        cm_mqtt_client_get_state(m->client) == CM_MQTT_STATE_DISCONNECTED)
+    if (mqtt_state->wanted && !mqtt_state->subscribed && !mqtt_state->connecting && (int32_t)(now - mqtt_state->next_connect) >= 0 &&
+        cm_mqtt_client_get_state(mqtt_state->client) == CM_MQTT_STATE_DISCONNECTED)
     {
-        m->next_connect = now + m->config.reconnect_min_ms;
+        mqtt_state->next_connect = now + mqtt_state->config.reconnect_minimum_ms;
         if (cm_modem_get_pdp_state(1) == 1)
         {
-            if (cm_mqtt_client_connect(m->client, &m->options) == 0)
+            if (cm_mqtt_client_connect(mqtt_state->client, &mqtt_state->options) == 0)
             {
-                m->connecting = true;
-                m->phase_started = now;
+                mqtt_state->connecting = true;
+                mqtt_state->phase_started = now;
             }
         }
     }
 }
 
 /*******************************************************************************
-* Function Name  : ml_stop
+* Function Name  : ml307y_stop
 * Description    : 请求停止并等待SDK断开及回调排空
 * Input          : user - 传输上下文
 * Output         : 断开状态
 * Return         : true完全静止；false仍需poll
 * Attention      : 不异步销毁客户端，避免回调使用已释放对象
 *******************************************************************************/
-static bool ml_stop(void *user)
+static bool ml307y_stop(void *user)
 {
-    ml_mqtt_t *m = user;
-    if (m->wanted)
+    ml307y_mqtt_state_t *mqtt_state = user;
+    if (mqtt_state->wanted)
     {
-        m->wanted = false;
-        m->generation = __atomic_add_fetch(&m->callback_generation, 1U, __ATOMIC_ACQ_REL);
-        ml_offline(m);
-        (void)cm_mqtt_client_disconnect(m->client);
+        mqtt_state->wanted = false;
+        mqtt_state->generation = __atomic_add_fetch(&mqtt_state->callback_generation, 1U, __ATOMIC_ACQ_REL);
+        ml307y_offline(mqtt_state);
+        (void)cm_mqtt_client_disconnect(mqtt_state->client);
     }
-    return cm_mqtt_client_get_state(m->client) == CM_MQTT_STATE_DISCONNECTED &&
-           osMessageQueueGetCount(m->events) == 0 && !m->publishing;
+    return cm_mqtt_client_get_state(mqtt_state->client) == CM_MQTT_STATE_DISCONNECTED &&
+           osMessageQueueGetCount(mqtt_state->events) == 0 && !mqtt_state->publishing;
 }
 
 /*******************************************************************************
-* Function Name  : ml_mqtt_create
+* Function Name  : ml307y_mqtt_create
 * Description    : 为当前产品创建显式传输实例
 * Input          : services - 产品服务
 * Output         : services.transport
 * Return         : true成功
 * Attention      : 最多使用SDK允许的客户端数量，不连接任何服务器
 *******************************************************************************/
-bool ml_mqtt_create(product_services_t *services)
+bool ml307y_mqtt_create(product_services_t *services)
 {
-    ml_mqtt_t *m;
+    ml307y_mqtt_state_t *mqtt_state;
     unsigned slot;
-    for (slot = 0; slot < CM_MQTT_CLIENT_MAX && s_clients[slot]; ++slot)
+    for (slot = 0; slot < CM_MQTT_CLIENT_MAX && mqtt_clients[slot]; ++slot)
     {
     }
     if (slot == CM_MQTT_CLIENT_MAX)
     {
         return false;
     }
-    m = calloc(1, sizeof(*m));
-    if (!m)
+    mqtt_state = cm_calloc(1, sizeof(*mqtt_state));
+    if (!mqtt_state)
     {
         return false;
     }
-    m->events = osMessageQueueNew(ML_MQTT_EVENTS, sizeof(ml_mqtt_event_t), NULL);
-    if (!m->events)
+    mqtt_state->events = osMessageQueueNew(ML307Y_MQTT_EVENTS, sizeof(ml307y_mqtt_event_t), NULL);
+    if (!mqtt_state->events)
     {
-        free(m);
+        cm_free(mqtt_state);
         return false;
     }
-    m->client = cm_mqtt_client_create();
-    if (!m->client)
+    mqtt_state->client = cm_mqtt_client_create();
+    if (!mqtt_state->client)
     {
-        osMessageQueueDelete(m->events);
-        free(m);
+        osMessageQueueDelete(mqtt_state->events);
+        cm_free(mqtt_state);
         return false;
     }
-    m->system = &services->system;
-    s_clients[slot] = m;
-    m->sdk_callbacks.connack_cb = ml_connection_cb;
-    m->sdk_callbacks.suback_cb = ml_subscribed_cb;
-    m->sdk_callbacks.puback_cb = ml_published_cb;
-    m->sdk_callbacks.publish_cb = ml_receive_cb;
-    m->sdk_callbacks.timeout_cb = ml_timeout_cb;
-    if (cm_mqtt_client_set_opt(m->client, CM_MQTT_OPT_EVENT, &m->sdk_callbacks) != 0)
+    mqtt_state->system = &services->system;
+    mqtt_clients[slot] = mqtt_state;
+    mqtt_state->sdk_callbacks.connack_cb = ml307y_connection_callback;
+    mqtt_state->sdk_callbacks.suback_cb = ml307y_subscribed_callback;
+    mqtt_state->sdk_callbacks.puback_cb = ml307y_published_callback;
+    mqtt_state->sdk_callbacks.publish_cb = ml307y_receive_callback;
+    mqtt_state->sdk_callbacks.timeout_cb = ml307y_timeout_cb;
+    if (cm_mqtt_client_set_opt(mqtt_state->client, CM_MQTT_OPT_EVENT, &mqtt_state->sdk_callbacks) != 0)
     {
         /* 保留上下文寿命，回调注册失败则不启用产品。 */
         return false;
     }
-    m->interface.user = m;
-    m->interface.start = ml_start;
-    m->interface.poll = ml_poll;
-    m->interface.online = ml_online;
-    m->interface.stop = ml_stop;
-    m->interface.publish = ml_publish;
-    services->transport = &m->interface;
+    mqtt_state->interface.user = mqtt_state;
+    mqtt_state->interface.start = ml307y_start;
+    mqtt_state->interface.poll = ml307y_poll;
+    mqtt_state->interface.online = ml307y_online;
+    mqtt_state->interface.stop = ml307y_stop;
+    mqtt_state->interface.publish = ml307y_publish;
+    services->transport = &mqtt_state->interface;
     return true;
 }

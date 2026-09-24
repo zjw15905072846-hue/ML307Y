@@ -8,7 +8,7 @@
 #if PRODUCT_HAS_MQTT
 #include "mbedtls/aes.h"
 #include <stddef.h>
-/* 随附底包 ELF 的 DWARF 显示 nr=0、rk_offset=8、buf=16、总长=288。 */
+/* 随附底包 ELF 的 DWARF 显示 nr=0、rk_offset=8、buffer=16、总长=288。 */
 _Static_assert(sizeof(mbedtls_aes_context) == 288, "Base AES ABI size mismatch");
 _Static_assert(offsetof(mbedtls_aes_context, MBEDTLS_PRIVATE(rk_offset)) == 8,
                "Base AES round key ABI mismatch");
@@ -19,59 +19,87 @@ _Static_assert(offsetof(mbedtls_aes_context, MBEDTLS_PRIVATE(buf)) == 16,
 /*-------------------------------------------typedef---------------------------------------------*/
 /*-------------------------------------------variables-------------------------------------------*/
 extern bool PRODUCT_BOARD_PREPARE(product_services_t *services);
-extern void PRODUCT_ENTRY(product_services_t *services);
+extern bool PRODUCT_ENTRY(product_services_t *services);
 /* 当前构建只选择一个产品，服务容器在产品任务整个生命周期内有效。 */
-static product_services_t s_services;
-static const product_descriptor_t s_product = {PRODUCT_ID, PRODUCT_NAME, PRODUCT_STORAGE_NAMESPACE,
+static product_services_t selected_product_services;
+static const product_descriptor_t selected_product = {PRODUCT_ID, PRODUCT_NAME, PRODUCT_STORAGE_NAMESPACE,
                                                PRODUCT_BOARD_PREPARE, PRODUCT_ENTRY};
 
 /*-------------------------------------------function---------------------------------------------*/
 
 /*******************************************************************************
-* Function Name  : product_boot_task
-* Description    : 初始化UART0诊断输出，验证底包身份并绑定唯一选中的产品与板
-* Input          : argument - 保留
-* Output         : 产品任务或明确启动诊断
-* Return         : 初始化失败时返回
-* Attention      : 串口初始化失败不阻止产品启动；未核验硬件不会开始报警业务
+* Function Name  : product_boot_initialize
+* Description    : 验证底包并依次绑定系统、板、存储、网络与产品入口
+* Input          : 无
+* Output         : 产品服务与业务任务
+* Return         : true - 启动完成；false - 初始化失败
+* Attention      : 失败时保留诊断，不继续启动后续模块
 *******************************************************************************/
-static void product_boot_task(void *argument)
+static bool product_boot_initialize(void)
 {
-    (void)argument;
-    if (ml_uart_diag_init() == 0)
+
+    if (ml307y_uart_diag_init() == 0)
     {
-        ml_uart_diag_printf("[project] UART0 ready");
+        ml307y_uart_diag_printf("[project] UART0 ready");
     }
     /* 先核对编译所用底包身份，避免错误接口表进入产品初始化。 */
     if (strcmp(project_base_identity(), PROJECT_BASE_ID) != 0)
     {
-        ml_uart_diag_printf("[project] incompatible base image");
-        return;
+        ml307y_uart_diag_printf("[project] incompatible base image");
+        return false;
     }
-    s_services.name = s_product.name;
-    s_services.product_id = s_product.id;
-    s_services.storage_namespace = s_product.storage_namespace;
-    if (!ml_system_create(&s_services) || !s_product.prepare_board(&s_services))
+    selected_product_services.name = selected_product.name;
+    selected_product_services.product_id = selected_product.id;
+    selected_product_services.storage_namespace = selected_product.storage_namespace;
+    if (!ml307y_system_create(&selected_product_services))
     {
-        ml_uart_diag_printf("[project] product/board not ready");
-        return;
+        ml307y_uart_diag_printf("[project] system not ready");
+        return false;
+    }
+    if (!selected_product.prepare_board(&selected_product_services))
+    {
+        ml307y_uart_diag_printf("[project] board not ready");
+        return false;
     }
 #if PRODUCT_HAS_STORAGE
-    if (!ml_storage_create(&s_services))
+    if (!ml307y_storage_create(&selected_product_services))
     {
-        s_services.system.fault("storage-bind", -1);
-        return;
+        selected_product_services.system.fault("storage-bind", -1);
+        return false;
     }
 #endif
 #if PRODUCT_HAS_MQTT
-    if (!ml_mqtt_create(&s_services))
+    if (!ml307y_mqtt_create(&selected_product_services))
     {
-        s_services.system.fault("mqtt-bind", -1);
-        return;
+        selected_product_services.system.fault("mqtt-bind", -1);
+        return false;
     }
 #endif
     /* 板、存储和传输端口就绪后，最后启动产品业务。 */
-    s_product.start(&s_services);
+    if (!selected_product.start(&selected_product_services))
+    {
+        selected_product_services.system.fault("product-start", -1);
+        return false;
+    }
+    return true;
+}
+
+/*******************************************************************************
+* Function Name  : product_boot_task
+* Description    : 执行一次产品初始化，随后在带延时的循环中保持任务存活
+* Input          : argument - 保留
+* Output         : 产品启动结果
+* Return         : 不返回
+* Attention      : 循环必须让出 CPU；产品前后台各自运行独立任务
+*******************************************************************************/
+static void product_boot_task(void *argument)
+{
+    (void)argument;
+    (void)product_boot_initialize();
+    while (1)
+    {
+        osDelay(60U * osKernelGetTickFreq());
+    }
 }
 
 /*******************************************************************************

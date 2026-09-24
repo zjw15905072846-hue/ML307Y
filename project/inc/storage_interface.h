@@ -23,6 +23,6 @@ typedef struct
     bool (*write)(void *user, const void *data, size_t size);
     /* 返回恢复时留下的告警，不改变镜像或清除故障记录。 */
     int (*warning)(void *user);
-} storage_if_t;
+} storage_interface_t;
 
 /*-------------------------------------------function---------------------------------------------*/

@@ -6,83 +6,83 @@
 #include "cm_iomux.h"
 #include "cm_pwm.h"
 #include "cm_adc.h"
-#include <stdlib.h>
+#include "cm_mem.h"
 
 /*-------------------------------------------define---------------------------------------------*/
 /*-------------------------------------------typedef---------------------------------------------*/
 typedef struct
 {
-    ab_board_t board;            /* 通用板状态与输出缓存。 */
-    ab_board_config_t config;    /* 核验后的模组引脚配置。 */
+    alarm_board_t board;            /* 通用板状态与输出缓存。 */
+    alarm_board_config_t config;    /* 核验后的模组引脚配置。 */
     void (*wake_notify)(void *); /* 中断只调用此通知唤醒前台。 */
     void *wake_argument;         /* 唤醒回调上下文。 */
-} ml_alarm_hal_t;
+} ml307y_alarm_hal_t;
 
 /*-------------------------------------------variables-------------------------------------------*/
 /* 随附 GPIO 库的逻辑脚到物理焊盘映射；物理 26/96 不在公开表中。 */
-static const int s_pad_by_gpio[] = {16, 25, 49, 76, 77, 86, 87, 17, 18,
+static const int pad_for_gpio[] = {16, 25, 49, 76, 77, 86, 87, 17, 18,
                                     19, 22, 23, 28, 29, 20, 21, 74, 75};
 /* 当前按键中断的唯一板级拥有者。 */
-static ml_alarm_hal_t *s_irq_owner;
+static ml307y_alarm_hal_t *key_interrupt_owner;
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
-* Function Name  : ml_pad
+* Function Name  : ml307y_pad
 * Description    : 查询当前SDK公开GPIO编号对应的物理焊盘
 * Input          : gpio - CM逻辑编号
 * Output         : 无
 * Return         : 物理脚号或-1
 * Attention      : 不能将模组物理编号直接用作CM_GPIO_NUM
 *******************************************************************************/
-static int ml_pad(int gpio)
+static int ml307y_pad(int gpio)
 {
-    if (gpio < 0 || gpio >= (int)(sizeof(s_pad_by_gpio) / sizeof(s_pad_by_gpio[0])))
+    if (gpio < 0 || gpio >= (int)(sizeof(pad_for_gpio) / sizeof(pad_for_gpio[0])))
     {
         return -1;
     }
-    return s_pad_by_gpio[gpio];
+    return pad_for_gpio[gpio];
 }
 
 /*******************************************************************************
-* Function Name  : ml_key_interrupt
+* Function Name  : ml307y_key_interrupt
 * Description    : 将键边沿通知前台，具体消抖仍在产品任务
 * Input          : 无
 * Output         : 零等待唤醒消息
 * Return         : 无
 * Attention      : 中断内不写Flash、不联网、不控制声光
 *******************************************************************************/
-static void ml_key_interrupt(void)
+static void ml307y_key_interrupt(void)
 {
-    if (s_irq_owner && s_irq_owner->wake_notify)
+    if (key_interrupt_owner && key_interrupt_owner->wake_notify)
     {
-        s_irq_owner->wake_notify(s_irq_owner->wake_argument);
+        key_interrupt_owner->wake_notify(key_interrupt_owner->wake_argument);
     }
 }
 
 /*******************************************************************************
-* Function Name  : ml_alarm_initialize
+* Function Name  : ml307y_alarm_initialize
 * Description    : 按核验结果设置引脚复用及输入输出
 * Input          : user - 板端口；config - 经核验映射
 * Output         : GPIO与PWM配置
 * Return         : true初始化完成
 * Attention      : 原板26和96脚未被当前公开表覆盖时拒绝启用
 *******************************************************************************/
-static bool ml_alarm_initialize(void *user, const ab_board_config_t *config)
+static bool ml307y_alarm_initialize(void *user, const alarm_board_config_t *config)
 {
-    ml_alarm_hal_t *hal = user;
+    ml307y_alarm_hal_t *hal = user;
     cm_gpio_cfg_t key = {CM_GPIO_MODE_NUM, CM_GPIO_DIRECTION_INPUT, CM_GPIO_PULL_UP};
     cm_gpio_cfg_t output = {CM_GPIO_MODE_NUM, CM_GPIO_DIRECTION_OUTPUT, CM_GPIO_PULL_DOWN};
     /* 同时核对逻辑 GPIO、物理焊盘及中断独占权，防止猜测接线。 */
-    if (!config->pinmap_verified || ml_pad(config->key_sdk_pin) != AB_MODULE_KEY_PIN ||
-        ml_pad(config->led_sdk_pin) != AB_MODULE_LED_PIN ||
-        ml_pad(config->buzzer_sdk_pin) != AB_MODULE_BUZZER_PIN ||
-        (s_irq_owner && s_irq_owner != hal))
+    if (!config->pinmap_verified || ml307y_pad(config->key_sdk_pin) != ALARM_BUTTON_MODULE_KEY_PIN ||
+        ml307y_pad(config->led_sdk_pin) != ALARM_BUTTON_MODULE_LED_PIN ||
+        ml307y_pad(config->buzzer_sdk_pin) != ALARM_BUTTON_MODULE_BUZZER_PIN ||
+        (key_interrupt_owner && key_interrupt_owner != hal))
     {
         return false;
     }
     hal->config = *config;
-    if (cm_iomux_set_pin_func((cm_iomux_pin_e)AB_MODULE_KEY_PIN, CM_IOMUX_FUNC_FUNCTION2) != 0 ||
-        cm_iomux_set_pin_func((cm_iomux_pin_e)AB_MODULE_LED_PIN, CM_IOMUX_FUNC_FUNCTION2) != 0 ||
+    if (cm_iomux_set_pin_func((cm_iomux_pin_e)ALARM_BUTTON_MODULE_KEY_PIN, CM_IOMUX_FUNC_FUNCTION2) != 0 ||
+        cm_iomux_set_pin_func((cm_iomux_pin_e)ALARM_BUTTON_MODULE_LED_PIN, CM_IOMUX_FUNC_FUNCTION2) != 0 ||
         cm_gpio_init((cm_gpio_num_e)config->key_sdk_pin, &key) != 0 ||
         cm_gpio_init((cm_gpio_num_e)config->led_sdk_pin, &output) != 0 ||
         cm_gpio_set_level((cm_gpio_num_e)config->led_sdk_pin, CM_GPIO_LEVEL_LOW) != 0)
@@ -105,8 +105,8 @@ static bool ml_alarm_initialize(void *user, const ab_board_config_t *config)
         return false;
     }
     /* 中断回调没有 user 参数，通过唯一拥有者转发。 */
-    s_irq_owner = hal;
-    if (cm_gpio_interrupt_register((cm_gpio_num_e)config->key_sdk_pin, ml_key_interrupt) != 0 ||
+    key_interrupt_owner = hal;
+    if (cm_gpio_interrupt_register((cm_gpio_num_e)config->key_sdk_pin, ml307y_key_interrupt) != 0 ||
         cm_gpio_interrupt_enable((cm_gpio_num_e)config->key_sdk_pin, CM_GPIO_IT_EDGE_BOTH) != 0)
     {
         return false;
@@ -115,16 +115,16 @@ static bool ml_alarm_initialize(void *user, const ab_board_config_t *config)
 }
 
 /*******************************************************************************
-* Function Name  : ml_alarm_key
+* Function Name  : ml307y_alarm_key
 * Description    : 读取按下接地的并联逻辑按键
 * Input          : user - 板上下文；pressed - 输出
 * Output         : pressed
 * Return         : true有效读取
 * Attention      : 读取失败不伪装成松开
 *******************************************************************************/
-static bool ml_alarm_key(void *user, bool *pressed)
+static bool ml307y_alarm_key(void *user, bool *pressed)
 {
-    ml_alarm_hal_t *hal = user;
+    ml307y_alarm_hal_t *hal = user;
     cm_gpio_level_e level;
     if (cm_gpio_get_level((cm_gpio_num_e)hal->config.key_sdk_pin, &level) != 0)
     {
@@ -135,16 +135,16 @@ static bool ml_alarm_key(void *user, bool *pressed)
 }
 
 /*******************************************************************************
-* Function Name  : ml_alarm_outputs
+* Function Name  : ml307y_alarm_outputs
 * Description    : 唯一声光驱动入口，节奏由公共执行器决定
 * Input          : user - 板；led/buzzer - 开关
 * Output         : 引脚电平及PWM门控
 * Return         : true全部成功
 * Attention      : 无源蜂鸣器静音保持同一复用并使用零占空比
 *******************************************************************************/
-static bool ml_alarm_outputs(void *user, bool led, bool buzzer)
+static bool ml307y_alarm_outputs(void *user, bool led, bool buzzer)
 {
-    ml_alarm_hal_t *hal = user;
+    ml307y_alarm_hal_t *hal = user;
     uint32_t period;
     if (cm_gpio_set_level((cm_gpio_num_e)hal->config.led_sdk_pin,
                           led ? CM_GPIO_LEVEL_HIGH : CM_GPIO_LEVEL_LOW) != 0)
@@ -161,14 +161,14 @@ static bool ml_alarm_outputs(void *user, bool led, bool buzzer)
 }
 
 /*******************************************************************************
-* Function Name  : ml_alarm_vbat
-* Description    : 通过SDK内部VBAT采样读取电池电压
+* Function Name  : ml307y_alarm_battery_voltage
+* Description    : 通过SDK内部BATTERY_VOLTAGE采样读取电池电压
 * Input          : user - 保留；millivolts - 输出
 * Output         : millivolts
 * Return         : true有效
 * Attention      : 不使用连接LED的ADC1，不构造充电状态
 *******************************************************************************/
-static bool ml_alarm_vbat(void *user, uint16_t *millivolts)
+static bool ml307y_alarm_battery_voltage(void *user, uint16_t *millivolts)
 {
     uint32_t value;
     (void)user;
@@ -181,55 +181,55 @@ static bool ml_alarm_vbat(void *user, uint16_t *millivolts)
 }
 
 /*******************************************************************************
-* Function Name  : ml_board_key
+* Function Name  : ml307y_board_key
 * Description    : 将通用板接口转发到已检查的报警板
 * Input          : user - 板；pressed - 输出
 * Output         : 按键状态
 * Return         : true成功
 * Attention      : 保留板初始化门控
 *******************************************************************************/
-static bool ml_board_key(void *user, bool *pressed)
+static bool ml307y_board_key(void *user, bool *pressed)
 {
-    return ab_board_key(&((ml_alarm_hal_t *)user)->board, pressed);
+    return alarm_board_key(&((ml307y_alarm_hal_t *)user)->board, pressed);
 }
 
 /*******************************************************************************
-* Function Name  : ml_board_output
+* Function Name  : ml307y_board_output
 * Description    : 经板级缓存应用声光状态
 * Input          : user - 板；led/buzzer - 开关
 * Output         : 实际声光
 * Return         : true成功
 * Attention      : GPIO只能由此入口控制
 *******************************************************************************/
-static bool ml_board_output(void *user, bool led, bool buzzer)
+static bool ml307y_board_output(void *user, bool led, bool buzzer)
 {
-    return ab_board_output(&((ml_alarm_hal_t *)user)->board, led, buzzer);
+    return alarm_board_output(&((ml307y_alarm_hal_t *)user)->board, led, buzzer);
 }
 
 /*******************************************************************************
-* Function Name  : ml_board_vbat
+* Function Name  : ml307y_board_battery_voltage
 * Description    : 经板级校验返回内部电压
 * Input          : user - 板；millivolts - 输出
 * Output         : 电压
 * Return         : true有效
 * Attention      : 后台任务调用
 *******************************************************************************/
-static bool ml_board_vbat(void *user, uint16_t *millivolts)
+static bool ml307y_board_battery_voltage(void *user, uint16_t *millivolts)
 {
-    return ab_board_vbat(&((ml_alarm_hal_t *)user)->board, millivolts);
+    return alarm_board_battery_voltage(&((ml307y_alarm_hal_t *)user)->board, millivolts);
 }
 
 /*******************************************************************************
-* Function Name  : ml_board_wakeup
+* Function Name  : ml307y_board_wakeup
 * Description    : 绑定前台非阻塞唤醒通知
 * Input          : user - 板；notify/argument - 回调
 * Output         : 板唤醒回调
 * Return         : 无
 * Attention      : 通知函数只投递消息
 *******************************************************************************/
-static void ml_board_wakeup(void *user, void (*notify)(void *), void *argument)
+static void ml307y_board_wakeup(void *user, void (*notify)(void *), void *argument)
 {
-    ml_alarm_hal_t *hal = user;
+    ml307y_alarm_hal_t *hal = user;
     hal->wake_argument = argument;
     hal->wake_notify = notify;
 }
@@ -244,32 +244,32 @@ static void ml_board_wakeup(void *user, void (*notify)(void *), void *argument)
 *******************************************************************************/
 bool alarm_board_prepare(product_services_t *services)
 {
-    ml_alarm_hal_t *hal = calloc(1, sizeof(*hal));
-    ab_board_ops_t ops;
-    ab_board_config_t config = {AB_KEY_SDK_PIN,     AB_LED_SDK_PIN,   AB_BUZZER_SDK_PIN,
-                                AB_PINMAP_VERIFIED, AB_WAKE_VERIFIED, AB_BUZZER_HZ};
+    ml307y_alarm_hal_t *hal = cm_calloc(1, sizeof(*hal));
+    alarm_board_operations_t operations;
+    alarm_board_config_t config = {ALARM_BUTTON_KEY_SDK_PIN,     ALARM_BUTTON_LED_SDK_PIN,   ALARM_BUTTON_BUZZER_SDK_PIN,
+                                ALARM_BUTTON_PINMAP_VERIFIED, ALARM_BUTTON_WAKE_VERIFIED, ALARM_BUTTON_BUZZER_HZ};
     int result;
     if (!hal)
     {
         return false;
     }
-    ops.user = hal;
-    ops.initialize = ml_alarm_initialize;
-    ops.read_key = ml_alarm_key;
-    ops.write_outputs = ml_alarm_outputs;
-    ops.read_vbat = ml_alarm_vbat;
-    result = ab_board_init(&hal->board, &config, &ops);
+    operations.user = hal;
+    operations.initialize = ml307y_alarm_initialize;
+    operations.read_key = ml307y_alarm_key;
+    operations.write_outputs = ml307y_alarm_outputs;
+    operations.read_battery_voltage = ml307y_alarm_battery_voltage;
+    result = alarm_board_init(&hal->board, &config, &operations);
     if (result != 0)
     {
         services->system.fault("alarm-board-unverified-pin26-pin96", result);
-        free(hal);
+        cm_free(hal);
         return false;
     }
     services->board.user = hal;
-    services->board.read_key = ml_board_key;
-    services->board.outputs = ml_board_output;
-    services->board.vbat = ml_board_vbat;
-    services->board.set_wakeup = ml_board_wakeup;
+    services->board.read_key = ml307y_board_key;
+    services->board.outputs = ml307y_board_output;
+    services->board.battery_voltage = ml307y_board_battery_voltage;
+    services->board.set_wakeup = ml307y_board_wakeup;
     services->board.ready = true;
     /* 休眠许可由板级唤醒验证位控制。 */
     services->board.wake_verified = config.wake_verified;

@@ -23,7 +23,7 @@ project/
 └─ SConscript
 ```
 
-只有同一功能有多个文件时才创建对应子目录，不为单文件功能创建空目录。构建清单显式选择源码，因此两个产品仍保持隔离。功耗接口暂集中在 system_if.h，产品决定休眠条件，ML307Y 适配负责工作锁；板级电池入口使用内部 VBAT，不占用接 LED 的 ADC1。
+只有同一功能有多个文件时才创建对应子目录，不为单文件功能创建空目录。构建清单显式选择源码，因此两个产品仍保持隔离。功耗接口暂集中在 system_interface.h，产品决定休眠条件，ML307Y 适配负责工作锁；板级电池入口使用内部 VBAT，不占用接 LED 的 ADC1。
 
 ## 构建
 
@@ -45,6 +45,8 @@ python project/tools/check_artifacts.py
 
 **默认报警包尚不能投入实机报警。**原板物理第 26、96 脚未在当前公开 GPIO 映射中得到可用绑定，初始化主动拒绝。账号、密钥和平台约定也未配置。模板包只输出启动诊断，不控制硬件。
 
+报警包上电后若板映射仍未核验，UART0 应先输出 `UART0 ready`，随后输出 `alarm-board-unverified-pin26-pin96` 和 `board not ready`；此时 `alarm-ui`、`alarm-worker` 不会创建。板验证通过后，平台会分别输出 `task alarm-ui created` 和 `task alarm-worker created`，任务创建失败会输出相应 `create failed`，且产品启动向上返回失败。任务创建日志只证明 RTOS 接受创建请求，是否持续运行及复位原因仍需实机观察。
+
 ## 报警行为
 
 - 每次 30 ms 消抖后的有效按下排队一个独立保存请求；前台立即开始提示。
@@ -59,10 +61,11 @@ python project/tools/check_artifacts.py
 ## 回归与扩展
 
 ```powershell
+python project/tools/run_host_tests.py --sim
 python project/tools/run_host_tests.py --cc "<本机原生 gcc、clang 或 tcc 的完整路径>"
 python -m unittest discover -s project/tests -p "test_*.py" -v
 ```
 
-主机测试的 AES 参考源码及配套头文件仅位于 tests/vendor，不参与固件。固件使用当前 SDK 的 mbedTLS 3.6.4 头文件和当前底包，编译时检查 AES 上下文 ABI。
+`--sim` 使用工程自带的 RV64 编译器和模拟器执行 C 用例，不需另装原生编译器；它验证软件行为，不代表实机 GPIO、串口、功耗或复位测试。主机测试的 AES 参考源码及配套头文件仅位于 tests/vendor，不参与固件。固件使用当前 SDK 的 mbedTLS 3.6.4 头文件和当前底包，编译时检查 AES 上下文 ABI。
 
 新增产品请看 [完整示例](docs/new_product_guide.md)，上板前请看 [硬件与平台核验项](docs/hardware_and_platform.md)，已执行测试及边界见 [迁移验收记录](docs/migration_validation.md)。

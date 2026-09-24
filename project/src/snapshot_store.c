@@ -9,51 +9,51 @@
 /*-------------------------------------------variables-------------------------------------------*/
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
-* Function Name  : ss_get32
+* Function Name  : snapshot_get32
 * Description    : 读取固定小端字段，不依赖结构体填充
-* Input          : p - 至少四字节输入
+* Input          : bytes - 至少四字节输入
 * Output         : 无
 * Return         : 解码值
 * Attention      : 只访问给定缓冲
 *******************************************************************************/
-static uint32_t ss_get32(const uint8_t *p)
+static uint32_t snapshot_get32(const uint8_t *bytes)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
 
 /*******************************************************************************
-* Function Name  : ss_put32
+* Function Name  : snapshot_put32
 * Description    : 写入固定小端字段
-* Input          : p - 四字节输出；value - 数值
-* Output         : p - 编码结果
+* Input          : bytes - 四字节输出；value - 数值
+* Output         : bytes - 编码结果
 * Return         : 无
 * Attention      : 不访问存储设备
 *******************************************************************************/
-static void ss_put32(uint8_t *p, uint32_t value)
+static void snapshot_put32(uint8_t *bytes, uint32_t value)
 {
-    unsigned i;
-    for (i = 0; i < 4; ++i)
+    unsigned index;
+    for (index = 0; index < 4; ++index)
     {
-        p[i] = (uint8_t)(value >> (8U * i));
+        bytes[index] = (uint8_t)(value >> (8U * index));
     }
 }
 
 /*******************************************************************************
-* Function Name  : ss_crc
+* Function Name  : snapshot_crc
 * Description    : 校验快照头与数据，校验字段自身按零计算
-* Input          : p - 完整记录；size - 字节数
+* Input          : bytes - 完整记录；size - 字节数
 * Output         : 无
 * Return         : CRC32
 * Attention      : 不修改输入
 *******************************************************************************/
-static uint32_t ss_crc(const uint8_t *p, size_t size)
+static uint32_t snapshot_crc(const uint8_t *bytes, size_t size)
 {
     uint32_t crc = 0xffffffffU;
-    size_t i;
+    size_t index;
     unsigned bit;
-    for (i = 0; i < size; ++i)
+    for (index = 0; index < size; ++index)
     {
-        crc ^= (i >= 24 && i < 28) ? 0 : p[i];
+        crc ^= (index >= 24 && index < 28) ? 0 : bytes[index];
         for (bit = 0; bit < 8; ++bit)
         {
             crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
@@ -63,61 +63,61 @@ static uint32_t ss_crc(const uint8_t *p, size_t size)
 }
 
 /*******************************************************************************
-* Function Name  : ss_check
+* Function Name  : snapshot_check
 * Description    : 验证产品身份、版本、长度及完整性
-* Input          : s - 存储上下文；data/size - 记录；generation - 输出代数
+* Input          : snapshot - 存储上下文；data/size - 记录；generation - 输出代数
 * Output         : generation - 有效记录代数
 * Return         : STORAGE状态码
 * Attention      : 外来格式不能当空白
 *******************************************************************************/
-static int ss_check(snapshot_store_t *s, const uint8_t *data, size_t size, uint64_t *generation)
+static int snapshot_check(snapshot_store_t *snapshot, const uint8_t *data, size_t size, uint64_t *generation)
 {
     if (size < SNAPSHOT_HEADER_BYTES)
     {
         return STORAGE_CORRUPT;
     }
-    if (ss_get32(data) != SNAPSHOT_MAGIC || ss_get32(data + 4) != SNAPSHOT_VERSION ||
-        ss_get32(data + 8) != s->product_id)
+    if (snapshot_get32(data) != SNAPSHOT_MAGIC || snapshot_get32(data + 4) != SNAPSHOT_VERSION ||
+        snapshot_get32(data + 8) != snapshot->product_id)
     {
         return STORAGE_FOREIGN;
     }
-    if (ss_get32(data + 12) != s->payload_size || size != SNAPSHOT_HEADER_BYTES + s->payload_size ||
-        ss_get32(data + 24) != ss_crc(data, size))
+    if (snapshot_get32(data + 12) != snapshot->payload_size || size != SNAPSHOT_HEADER_BYTES + snapshot->payload_size ||
+        snapshot_get32(data + 24) != snapshot_crc(data, size))
     {
         return STORAGE_CORRUPT;
     }
-    *generation = ss_get32(data + 16) | ((uint64_t)ss_get32(data + 20) << 32);
+    *generation = snapshot_get32(data + 16) | ((uint64_t)snapshot_get32(data + 20) << 32);
     return *generation ? STORAGE_OK : STORAGE_CORRUPT;
 }
 
 /*******************************************************************************
-* Function Name  : ss_read
+* Function Name  : snapshot_read
 * Description    : 扫描双快照并恢复最新完整提交
 * Input          : user - 存储上下文；data/size - 产品镜像输出
 * Output         : data - 选中的镜像
 * Return         : 空白、正常或明确错误
 * Attention      : 任何读取错误或外来格式阻止初始化
 *******************************************************************************/
-static int ss_read(void *user, void *data, size_t size)
+static int snapshot_read(void *user, void *data, size_t size)
 {
-    snapshot_store_t *s = user;
+    snapshot_store_t *snapshot = user;
     uint64_t generations[2] = {0, 0};
     int status[2];
     size_t actual;
     unsigned slot;
-    if (!s || !data || !size || size > SNAPSHOT_MAX_PAYLOAD)
+    if (!snapshot || !data || !size || size > SNAPSHOT_MAXIMUM_PAYLOAD)
     {
         return STORAGE_NOT_READY;
     }
-    s->ready = false;
-    s->active = -1;
-    s->warning = 0;
-    s->corrupt_mask = 0;
-    s->payload_size = size;
-    s->generation = 0;
+    snapshot->ready = false;
+    snapshot->active = -1;
+    snapshot->warning = 0;
+    snapshot->corrupt_mask = 0;
+    snapshot->payload_size = size;
+    snapshot->generation = 0;
     for (slot = 0; slot < 2; ++slot)
     {
-        status[slot] = s->files.probe(s->files.user, slot);
+        status[slot] = snapshot->files.probe(snapshot->files.user, slot);
         if (status[slot] == STORAGE_EMPTY)
         {
             continue;
@@ -127,111 +127,111 @@ static int ss_read(void *user, void *data, size_t size)
             return STORAGE_IO_ERROR;
         }
         actual = 0;
-        if (s->files.read(s->files.user, slot, s->verify, sizeof(s->verify), &actual) != STORAGE_OK)
+        if (snapshot->files.read(snapshot->files.user, slot, snapshot->verify, sizeof(snapshot->verify), &actual) != STORAGE_OK)
         {
             return STORAGE_IO_ERROR;
         }
-        status[slot] = ss_check(s, s->verify, actual, &generations[slot]);
+        status[slot] = snapshot_check(snapshot, snapshot->verify, actual, &generations[slot]);
         if (status[slot] == STORAGE_FOREIGN)
         {
             return STORAGE_FOREIGN;
         }
         if (status[slot] == STORAGE_CORRUPT)
         {
-            s->corrupt_mask |= 1U << slot;
-            s->warning = STORAGE_CORRUPT;
+            snapshot->corrupt_mask |= 1U << slot;
+            snapshot->warning = STORAGE_CORRUPT;
             continue;
         }
         /* 相同代数却内容不同意味着无法确定哪份是真实提交。 */
-        if (s->active >= 0 && generations[slot] == s->generation &&
-            memcmp(s->record, s->verify, actual) != 0)
+        if (snapshot->active >= 0 && generations[slot] == snapshot->generation &&
+            memcmp(snapshot->record, snapshot->verify, actual) != 0)
         {
             return STORAGE_CORRUPT;
         }
-        if (s->active < 0 || generations[slot] > s->generation)
+        if (snapshot->active < 0 || generations[slot] > snapshot->generation)
         {
-            memcpy(s->record, s->verify, actual);
-            s->active = (int)slot;
-            s->generation = generations[slot];
+            memcpy(snapshot->record, snapshot->verify, actual);
+            snapshot->active = (int)slot;
+            snapshot->generation = generations[slot];
         }
     }
-    if (s->active < 0)
+    if (snapshot->active < 0)
     {
         /* 两槽均空才允许初始化；只剩损坏槽时不能当作新设备覆盖。 */
-        if (s->corrupt_mask)
+        if (snapshot->corrupt_mask)
         {
             return STORAGE_CORRUPT;
         }
-        s->ready = true;
+        snapshot->ready = true;
         return STORAGE_EMPTY;
     }
-    memcpy(data, s->record + SNAPSHOT_HEADER_BYTES, size);
-    s->ready = true;
+    memcpy(data, snapshot->record + SNAPSHOT_HEADER_BYTES, size);
+    snapshot->ready = true;
     return STORAGE_OK;
 }
 
 /*******************************************************************************
-* Function Name  : ss_write
+* Function Name  : snapshot_write
 * Description    : 写入非活动快照并同步回读，完成后才切换代数
 * Input          : user - 上下文；data/size - 新产品镜像
 * Output         : 更新已确认的活动槽
 * Return         : true完整提交；false失败
 * Attention      : 失败后锁住写入，保留最后完整快照
 *******************************************************************************/
-static bool ss_write(void *user, const void *data, size_t size)
+static bool snapshot_write(void *user, const void *data, size_t size)
 {
-    snapshot_store_t *s = user;
+    snapshot_store_t *snapshot = user;
     unsigned slot;
     uint64_t generation;
     uint64_t checked = 0;
     size_t actual = 0;
     size_t bytes = SNAPSHOT_HEADER_BYTES + size;
-    if (!s || !s->ready || !data || size != s->payload_size || s->generation == UINT64_MAX)
+    if (!snapshot || !snapshot->ready || !data || size != snapshot->payload_size || snapshot->generation == UINT64_MAX)
     {
         return false;
     }
-    slot = s->active == 0 ? 1U : 0U;
+    slot = snapshot->active == 0 ? 1U : 0U;
     /* 覆盖坏槽前先保留原件，便于排查损坏原因。 */
-    if ((s->corrupt_mask & (1U << slot)) &&
-        (!s->files.preserve || !s->files.preserve(s->files.user, slot)))
+    if ((snapshot->corrupt_mask & (1U << slot)) &&
+        (!snapshot->files.preserve || !snapshot->files.preserve(snapshot->files.user, slot)))
     {
-        s->ready = false;
+        snapshot->ready = false;
         return false;
     }
-    generation = s->generation + 1;
-    memset(s->record, 0, SNAPSHOT_HEADER_BYTES);
-    ss_put32(s->record, SNAPSHOT_MAGIC);
-    ss_put32(s->record + 4, SNAPSHOT_VERSION);
-    ss_put32(s->record + 8, s->product_id);
-    ss_put32(s->record + 12, (uint32_t)size);
-    ss_put32(s->record + 16, (uint32_t)generation);
-    ss_put32(s->record + 20, (uint32_t)(generation >> 32));
-    memcpy(s->record + SNAPSHOT_HEADER_BYTES, data, size);
-    ss_put32(s->record + 24, ss_crc(s->record, bytes));
+    generation = snapshot->generation + 1;
+    memset(snapshot->record, 0, SNAPSHOT_HEADER_BYTES);
+    snapshot_put32(snapshot->record, SNAPSHOT_MAGIC);
+    snapshot_put32(snapshot->record + 4, SNAPSHOT_VERSION);
+    snapshot_put32(snapshot->record + 8, snapshot->product_id);
+    snapshot_put32(snapshot->record + 12, (uint32_t)size);
+    snapshot_put32(snapshot->record + 16, (uint32_t)generation);
+    snapshot_put32(snapshot->record + 20, (uint32_t)(generation >> 32));
+    memcpy(snapshot->record + SNAPSHOT_HEADER_BYTES, data, size);
+    snapshot_put32(snapshot->record + 24, snapshot_crc(snapshot->record, bytes));
     /* 同步写入并回读逐字节确认后，才宣布新代数有效。 */
-    if (!s->files.write_sync(s->files.user, slot, s->record, bytes) ||
-        s->files.read(s->files.user, slot, s->verify, sizeof(s->verify), &actual) != STORAGE_OK ||
-        ss_check(s, s->verify, actual, &checked) != STORAGE_OK || checked != generation ||
-        memcmp(s->record, s->verify, bytes) != 0)
+    if (!snapshot->files.write_sync(snapshot->files.user, slot, snapshot->record, bytes) ||
+        snapshot->files.read(snapshot->files.user, slot, snapshot->verify, sizeof(snapshot->verify), &actual) != STORAGE_OK ||
+        snapshot_check(snapshot, snapshot->verify, actual, &checked) != STORAGE_OK || checked != generation ||
+        memcmp(snapshot->record, snapshot->verify, bytes) != 0)
     {
-        s->ready = false;
+        snapshot->ready = false;
         return false;
     }
-    s->generation = generation;
-    s->active = (int)slot;
-    s->corrupt_mask &= ~(1U << slot);
+    snapshot->generation = generation;
+    snapshot->active = (int)slot;
+    snapshot->corrupt_mask &= ~(1U << slot);
     return true;
 }
 
 /*******************************************************************************
-* Function Name  : ss_warning
+* Function Name  : snapshot_warning
 * Description    : 返回恢复过程中发现的损坏告警
 * Input          : user - 快照上下文
 * Output         : 无
 * Return         : 0或STORAGE_CORRUPT
 * Attention      : 告警不清除已有快照
 *******************************************************************************/
-static int ss_warning(void *user)
+static int snapshot_warning(void *user)
 {
     return ((snapshot_store_t *)user)->warning;
 }
@@ -244,10 +244,10 @@ static int ss_warning(void *user)
 * Return         : 产品存储接口
 * Attention      : 只绑定接口，真正读取由read触发
 *******************************************************************************/
-storage_if_t snapshot_storage(snapshot_store_t *store, uint32_t product_id,
-                              const snapshot_file_if_t *files)
+storage_interface_t snapshot_storage(snapshot_store_t *store, uint32_t product_id,
+                              const snapshot_file_interface_t *files)
 {
-    storage_if_t result = {store, ss_read, ss_write, ss_warning};
+    storage_interface_t result = {store, snapshot_read, snapshot_write, snapshot_warning};
     memset(store, 0, sizeof(*store));
     store->files = *files;
     store->product_id = product_id;

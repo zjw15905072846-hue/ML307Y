@@ -6,8 +6,8 @@
 /*-------------------------------------------variables-------------------------------------------*/
 static alarm_runtime_t runtime;
 static product_services_t services;
-static kw_transport_t transport;
-static al_image_t disk_image;
+static kaiwan_transport_t transport;
+static alarm_storage_image_t disk_image;
 static bool disk_exists;
 static bool fail_write;
 static uint32_t now_ms;
@@ -23,6 +23,9 @@ static bool led_on;
 static unsigned error_posts;
 static unsigned queue_count;
 static unsigned thread_count;
+static unsigned queue_limit = 2;
+static unsigned thread_limit = 2;
+static alarm_runtime_t *startup_context;
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
@@ -128,11 +131,11 @@ static bool queue_put(void *queue, const void *message, uint32_t wait)
     }
     else
     {
-        if (m->kind == AR_ERROR)
+        if (m->kind == ALARM_MSG_BACKGROUND_ERROR)
         {
             ++error_posts;
         }
-        ar_ui_message(&runtime, m, now_ms);
+        alarm_handle_background_result(&runtime, m, now_ms);
     }
     return true;
 }
@@ -161,26 +164,26 @@ static bool output(void *user, bool led, bool buzzer)
 * Return         : 成功
 * Attention      : PUBACK不隐式生成业务确认
 *******************************************************************************/
-static kw_cloud_result_t publish(void *user, const char *topic, const uint8_t *payload, size_t size,
+static kaiwan_cloud_result_t publish(void *user, const char *topic, const uint8_t *payload, size_t size,
                                  uint8_t qos, bool retain, uint32_t cookie)
 {
-    uint8_t decoded[KW_PROTOCOL_MAX_FRAME_SIZE];
-    kw_protocol_workspace_t workspace;
-    kw_frame_view_t frame;
+    uint8_t decoded[KAIWAN_PROTOCOL_MAXIMUM_FRAME_SIZE];
+    kaiwan_protocol_workspace_t workspace;
+    kaiwan_frame_view_t frame;
     (void)user;
     (void)topic;
     (void)qos;
     (void)retain;
     (void)cookie;
-    assert(kw_session_decode(&runtime.protocol, &workspace, (const char *)payload, size, decoded,
-                             sizeof(decoded), &frame) == KW_OK);
+    assert(kaiwan_session_decode(&runtime.protocol, &workspace, (const char *)payload, size, decoded,
+                             sizeof(decoded), &frame) == KAIWAN_OK);
     assert(disk_exists && disk_image.next_sequence > frame.sequence);
     wire_sequence = frame.sequence;
     wire_command = frame.command;
     wire_type = frame.data[0];
     wire_event = frame.data[16];
     ++published;
-    return KW_CLOUD_OK;
+    return KAIWAN_CLOUD_OK;
 }
 
 /*******************************************************************************
@@ -193,17 +196,17 @@ static kw_cloud_result_t publish(void *user, const char *topic, const uint8_t *p
 *******************************************************************************/
 static void response(uint16_t sequence, uint8_t code)
 {
-    uint8_t frame[KW_PROTOCOL_MAX_FRAME_SIZE];
+    uint8_t frame[KAIWAN_PROTOCOL_MAXIMUM_FRAME_SIZE];
     uint8_t iv[16] = {0};
-    kw_protocol_workspace_t workspace;
-    char json[KW_PROTOCOL_MAX_JSON_SIZE];
+    kaiwan_protocol_workspace_t workspace;
+    char json[KAIWAN_PROTOCOL_MAXIMUM_JSON_SIZE];
     size_t length;
     size_t encoded;
-    assert(kw_protocol_build_frame(&runtime.protocol, sequence, KW_CMD_SERVER_RESPONSE, &code, 1,
-                                   frame, sizeof(frame), &length) == KW_OK);
-    assert(kw_protocol_wrap_json(&runtime.protocol, &workspace, frame, length, iv, json,
-                                 sizeof(json), &encoded) == KW_OK);
-    assert(ar_cloud_message("down", 4, (const uint8_t *)json, encoded, &runtime) == KW_CLOUD_OK);
+    assert(kaiwan_protocol_build_frame(&runtime.protocol, sequence, KAIWAN_COMMAND_SERVER_RESPONSE, &code, 1,
+                                   frame, sizeof(frame), &length) == KAIWAN_OK);
+    assert(kaiwan_protocol_wrap_json(&runtime.protocol, &workspace, frame, length, iv, json,
+                                 sizeof(json), &encoded) == KAIWAN_OK);
+    assert(alarm_on_cloud_message("down", 4, (const uint8_t *)json, encoded, &runtime) == KAIWAN_CLOUD_OK);
 }
 
 /*******************************************************************************
@@ -217,15 +220,15 @@ static void response(uint16_t sequence, uint8_t code)
 static void press(uint32_t time)
 {
     unsigned index = submitted_count;
-    ab_poll(&runtime.app, false, time - 40, NULL);
-    ab_poll(&runtime.app, false, time - 10, NULL);
-    ab_poll(&runtime.app, true, time, NULL);
+    alarm_button_update(&runtime.button_state, false, time - 40);
+    alarm_button_update(&runtime.button_state, false, time - 10);
+    alarm_button_update(&runtime.button_state, true, time);
     now_ms = time + 30;
-    ab_poll(&runtime.app, true, now_ms, NULL);
+    alarm_button_update(&runtime.button_state, true, now_ms);
     assert(led_on && submitted_count == index + 1);
-    assert(runtime.app.pending_saves == 1);
-    ar_worker_message(&runtime, &submitted[index]);
-    assert(runtime.app.pending_saves == 0);
+    assert(runtime.button_state.pending_save_count == 1);
+    alarm_handle_front_request(&runtime, &submitted[index]);
+    assert(runtime.button_state.pending_save_count == 0);
 }
 
 /*******************************************************************************
@@ -240,15 +243,20 @@ static void *create_queue(unsigned count, unsigned bytes)
 {
     (void)count;
     (void)bytes;
-    return ++queue_count == 1 ? (void *)1 : (void *)2;
+    ++queue_count;
+    if (queue_count > queue_limit)
+    {
+        return NULL;
+    }
+    return queue_count == 1 ? (void *)1 : (void *)2;
 }
 
 /*******************************************************************************
 * Function Name  : start_thread
-* Description    : 模拟前台成功而后台创建失败
+* Description    : 按设定数量模拟任务创建成功或失败
 * Input          : name/entry/argument/stack/foreground - 任务参数
 * Output         : 计数
-* Return         : 第一次成功
+* Return         : 未超过成功数量时为 true
 * Attention      : 仅验证错误通知路径
 *******************************************************************************/
 static bool start_thread(const char *name, void (*entry)(void *), void *argument, unsigned stack,
@@ -256,10 +264,10 @@ static bool start_thread(const char *name, void (*entry)(void *), void *argument
 {
     (void)name;
     (void)entry;
-    (void)argument;
+    startup_context = argument;
     (void)stack;
     (void)foreground;
-    return ++thread_count == 1;
+    return ++thread_count <= thread_limit;
 }
 
 /*******************************************************************************
@@ -272,9 +280,9 @@ static bool start_thread(const char *name, void (*entry)(void *), void *argument
 *******************************************************************************/
 int main(void)
 {
-    ab_config_t config = ab_default_config();
-    ab_io_t io = {&runtime, output, NULL, ar_submit_event};
-    storage_if_t store = {NULL, read_store, write_store, NULL};
+    alarm_button_config_t config = alarm_button_default_config();
+    alarm_button_callbacks_t callbacks = {&runtime, output, NULL, alarm_queue_save_request};
+    storage_interface_t store = {NULL, read_store, write_store, NULL};
     uint16_t first_sequence;
     uint16_t second_sequence;
     alarm_message_t idle = {0};
@@ -284,13 +292,13 @@ int main(void)
     services.system.fault = fault;
     runtime.services = &services;
     runtime.transport = &transport;
-    runtime.ui_queue = (void *)2;
-    runtime.worker_queue = (void *)1;
+    runtime.front_queue = (void *)2;
+    runtime.background_queue = (void *)1;
     transport.publish = publish;
-    assert(ab_init(&runtime.app, &config, &io, NULL, NULL) == AL_OK);
-    assert(al_store_open(&runtime.store, AB_PRODUCT_ID, &store) == AL_OK);
-    runtime.worker_ready = true;
-    assert(!ar_configure(&runtime)); /* No invented credentials in shipped defaults. */
+    assert(alarm_button_init(&runtime.button_state, &config, &callbacks) == ALARM_OK);
+    assert(alarm_store_open(&runtime.store, ALARM_BUTTON_PRODUCT_ID, &store) == ALARM_OK);
+    runtime.storage_ready = true;
+    assert(!alarm_load_cloud_config(&runtime)); /* No invented credentials in shipped defaults. */
     runtime.protocol.manufacturer_id = 0x1234;
     memset(runtime.protocol.aes_key, 0x42, 16);
     memset(runtime.protocol.factory_code, 'T', 32);
@@ -300,65 +308,90 @@ int main(void)
     strcpy(runtime.identity.iccid, "12345678901234567890");
     runtime.identity.unknown_telemetry_verified = true;
     runtime.identity.unknown_telemetry = 0xff;
-    al_reporter_init(&runtime.reporter, &runtime.store, ar_send_alarm, &runtime, 10000, 5000,
+    alarm_reporter_init(&runtime.reporter, &runtime.store, alarm_publish_event, &runtime, 10000, 5000,
                      30000);
     press(100);
     press(1000);
     assert(runtime.store.image.count == 2);
-    assert(runtime.app.latest_event_id == 2);
+    assert(runtime.button_state.indicator.event_id == 2);
     runtime.heartbeat_needed = true;
-    ar_control(&runtime, now_ms);
-    assert(wire_command == KW_CMD_REGISTER && wire_type == 4);
+    alarm_send_registration_or_heartbeat(&runtime, now_ms);
+    assert(wire_command == KAIWAN_COMMAND_REGISTER && wire_type == 4);
     response(wire_sequence, 0);
-    assert(runtime.registered && runtime.store.image.count == 2);
-    ar_control(&runtime, now_ms);
-    assert(wire_command == KW_CMD_EVENT && wire_type == 4 && wire_event == 1);
+    assert(runtime.platform_registered && runtime.store.image.count == 2);
+    alarm_send_registration_or_heartbeat(&runtime, now_ms);
+    assert(wire_command == KAIWAN_COMMAND_EVENT && wire_type == 4 && wire_event == 1);
     response(wire_sequence, 0);
     assert(!runtime.heartbeat_needed && runtime.store.image.count == 2);
-    al_reporter_poll(&runtime.reporter, true, now_ms);
+    alarm_reporter_poll(&runtime.reporter, true, now_ms);
     first_sequence = wire_sequence;
     assert(wire_type == 4 && wire_event == 0x0c);
-    ar_cloud_tx(first_sequence, KW_CLOUD_OK, &runtime);
-    assert(runtime.store.image.count == 2 && !runtime.app.indicator.acked);
-    assert(ar_cloud_message("down", 4, (const uint8_t *)"bad", 3, &runtime) != KW_CLOUD_OK);
+    alarm_on_publish_result(first_sequence, KAIWAN_CLOUD_OK, &runtime);
+    assert(runtime.store.image.count == 2 && !runtime.button_state.indicator.acked);
+    assert(alarm_on_cloud_message("down", 4, (const uint8_t *)"bad", 3, &runtime) != KAIWAN_CLOUD_OK);
     now_ms = 1200;
     response(first_sequence, 0);
-    assert(runtime.store.image.count == 1 && !runtime.app.indicator.acked);
+    assert(runtime.store.image.count == 1 && !runtime.button_state.indicator.acked);
     response(first_sequence, 0);
     assert(runtime.store.image.count == 1);
-    al_reporter_poll(&runtime.reporter, true, now_ms);
+    alarm_reporter_poll(&runtime.reporter, true, now_ms);
     second_sequence = wire_sequence;
     fail_write = true;
     response(second_sequence, 0);
-    assert(runtime.store.image.count == 1 && faults > 0 && !runtime.app.indicator.acked);
+    assert(runtime.store.image.count == 1 && faults > 0 && !runtime.button_state.indicator.acked);
     fail_write = false;
     response(second_sequence, 1);
     assert(runtime.store.image.count == 1);
     now_ms = 36000;
-    ab_poll(&runtime.app, false, now_ms, NULL);
+    alarm_button_update(&runtime.button_state, false, now_ms);
     assert(!led_on && runtime.store.image.count == 1);
-    al_reporter_poll(&runtime.reporter, true, now_ms);
+    alarm_reporter_poll(&runtime.reporter, true, now_ms);
     now_ms += 30000;
-    al_reporter_poll(&runtime.reporter, true, now_ms);
+    alarm_reporter_poll(&runtime.reporter, true, now_ms);
     assert(published >= 5);
     response(second_sequence, 0); /* A previous real attempt may still acknowledge its event. */
-    assert(runtime.store.image.count == 0 && runtime.app.indicator.acked);
-    idle.kind = AR_IDLE;
+    assert(runtime.store.image.count == 0 && runtime.button_state.indicator.acked);
+    idle.kind = ALARM_MSG_BACKGROUND_IDLE;
     idle.request = 1;
-    ar_ui_message(&runtime, &idle, now_ms);
-    assert(!runtime.app.background_idle);
+    alarm_handle_background_result(&runtime, &idle, now_ms);
+    assert(!runtime.button_state.background_idle);
     idle.request = 2;
-    ar_ui_message(&runtime, &idle, now_ms);
-    assert(runtime.app.background_idle);
+    alarm_handle_background_result(&runtime, &idle, now_ms);
+    assert(runtime.button_state.background_idle);
     services.board.ready = true;
     services.transport = &transport;
     services.system.allocate = malloc;
     services.system.queue_create = create_queue;
     services.system.thread_start = start_thread;
+    services.board.ready = false;
+    assert(!alarm_product_start(&services));
+    assert(thread_count == 0);
+    services.board.ready = true;
+    queue_limit = 0;
+    assert(!alarm_product_start(&services));
+    assert(thread_count == 0);
+    queue_limit = 2;
+    queue_count = 0;
+    thread_limit = 0;
+    assert(!alarm_product_start(&services));
+    assert(thread_count == 1);
+    assert(startup_context && !startup_context->startup_ready);
+    queue_count = 0;
+    thread_count = 0;
+    thread_limit = 1;
     error_posts = 0;
-    alarm_product_start(&services);
-    assert(thread_count == 2 && error_posts == 1);
-    puts("runtime: encrypted business ACK, registration, heartbeat, re-press, failed delete and "
+    assert(!alarm_product_start(&services));
+    assert(thread_count == 2 && error_posts == 0);
+    assert(!startup_context->startup_ready);
+    assert(startup_context->startup_failed);
+    queue_count = 0;
+    thread_count = 0;
+    thread_limit = 2;
+    assert(alarm_product_start(&services));
+    assert(thread_count == 2);
+    assert(startup_context->startup_ready);
+    assert(!startup_context->startup_failed);
+    puts("runtime: encrypted business confirmation, registration, heartbeat, re-press, failed delete and "
          "late retry OK");
     return 0;
 }

@@ -44,6 +44,6 @@ typedef struct
     void (*fault)(const char *module, int error);
     /* 由前台唯一所有者管理；只有业务静止且板唤醒已验证才能解除。 */
     void (*power_hold)(void *user, bool hold);
-} system_if_t;
+} system_interface_t;
 
 /*-------------------------------------------function---------------------------------------------*/

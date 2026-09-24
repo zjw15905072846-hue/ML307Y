@@ -23,7 +23,7 @@ typedef struct
 static cm_mqtt_client_t client;
 static uint32_t now_ms;
 static unsigned received;
-static unsigned tx_done;
+static unsigned transmit_done;
 static unsigned faults;
 static unsigned online_count;
 
@@ -333,36 +333,36 @@ static void state_changed(bool online, void *user)
 /*******************************************************************************
 * Function Name  : message
 * Description    : 只接收完整并已复制的消息
-* Input          : topic/topic_len/payload/size/user - 数据
+* Input          : topic/topic_length/payload/size/user - 数据
 * Output         : 接收计数
 * Return         : 成功
 * Attention      : 断言SDK临时缓冲没有被继续引用
 *******************************************************************************/
-static kw_cloud_result_t message(const char *topic, size_t topic_len, const uint8_t *payload,
+static kaiwan_cloud_result_t message(const char *topic, size_t topic_length, const uint8_t *payload,
                                  size_t size, void *user)
 {
     (void)user;
-    assert(topic_len == 4 && memcmp(topic, "down", 4) == 0);
+    assert(topic_length == 4 && memcmp(topic, "down", 4) == 0);
     assert(size == 6 && memcmp(payload, "abcdef", 6) == 0);
     ++received;
-    return KW_CLOUD_OK;
+    return KAIWAN_CLOUD_OK;
 }
 
 /*******************************************************************************
-* Function Name  : tx_result
+* Function Name  : transmit_result
 * Description    : 捕获传输回执
 * Input          : cookie/result/user - 结果
 * Output         : 计数
 * Return         : 无
 * Attention      : 不修改业务存储
 *******************************************************************************/
-static void tx_result(uint32_t cookie, kw_cloud_result_t result, void *user)
+static void transmit_result(uint32_t cookie, kaiwan_cloud_result_t result, void *user)
 {
     (void)user;
     assert(cookie == 42);
-    if (result == KW_CLOUD_OK)
+    if (result == KAIWAN_CLOUD_OK)
     {
-        ++tx_done;
+        ++transmit_done;
     }
 }
 
@@ -374,16 +374,16 @@ static void tx_result(uint32_t cookie, kw_cloud_result_t result, void *user)
 * Return         : 无
 * Attention      : 模拟SDK顺序回调
 *******************************************************************************/
-static void connect_ready(ml_mqtt_t *m)
+static void connect_ready(ml307y_mqtt_state_t *m)
 {
     int qos = 1;
     client.state = CM_MQTT_STATE_CONNECTED;
     assert(client.callbacks.connack_cb(&client, 0, 0) == 0);
-    ml_poll(m, now_ms);
-    assert(!ml_online(m));
+    ml307y_poll(m, now_ms);
+    assert(!ml307y_online(m));
     assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == 0);
-    ml_poll(m, now_ms);
-    assert(ml_online(m));
+    ml307y_poll(m, now_ms);
+    assert(ml307y_online(m));
 }
 
 /*******************************************************************************
@@ -397,80 +397,80 @@ static void connect_ready(ml_mqtt_t *m)
 int main(void)
 {
     product_services_t services = {0};
-    kw_cloud_config_t config;
-    kw_cloud_callbacks_t callbacks = {state_changed, message, NULL, tx_result, NULL};
-    ml_mqtt_t *m;
+    kaiwan_cloud_config_t config;
+    kaiwan_cloud_callbacks_t callbacks = {state_changed, message, NULL, transmit_result, NULL};
+    ml307y_mqtt_state_t *m;
     char first[] = "abc";
     char last[] = "def";
     unsigned i;
     int qos = 1;
     services.system.millis = clock_now;
     services.system.fault = fault;
-    assert(ml_mqtt_create(&services));
-    m = ((kw_transport_t *)services.transport)->user;
-    kw_cloud_config_init(&config);
+    assert(ml307y_mqtt_create(&services));
+    m = ((kaiwan_transport_t *)services.transport)->user;
+    kaiwan_cloud_config_init(&config);
     strcpy(config.local_imei, "123456789012345");
     strcpy(config.broker_host, "test.invalid");
     strcpy(config.client_id, "test-client");
     strcpy(config.platform_up_topic, "up");
     strcpy(config.platform_down_topic, "down");
-    assert(ml_start(m, &config, &callbacks) == KW_CLOUD_OK);
-    ml_poll(m, 0);
-    assert(!ml_online(m));
+    assert(ml307y_start(m, &config, &callbacks) == KAIWAN_CLOUD_OK);
+    ml307y_poll(m, 0);
+    assert(!ml307y_online(m));
     connect_ready(m);
     assert(online_count == 1);
     assert(client.callbacks.publish_cb(&client, 5, "down", 6, 3, first) == 0);
     first[0] = 'X';
-    ml_poll(m, 0);
+    ml307y_poll(m, 0);
     assert(received == 0);
     assert(client.callbacks.publish_cb(&client, 5, NULL, 6, 3, last) == 0);
-    ml_poll(m, 0);
+    ml307y_poll(m, 0);
     assert(received == 1);
-    assert(ml_publish(m, "up", (const uint8_t *)"alarm", 5, 1, false, 42) == KW_CLOUD_OK);
-    assert(tx_done == 0);
+    assert(ml307y_publish(m, "up", (const uint8_t *)"alarm", 5, 1, false, 42) == KAIWAN_CLOUD_OK);
+    assert(transmit_done == 0);
     assert(client.callbacks.puback_cb(&client, client.id, 0) == 0);
-    ml_poll(m, 0);
-    assert(tx_done == 1);
+    ml307y_poll(m, 0);
+    assert(transmit_done == 1);
 
     /* Old queued publish must be discarded across disconnect/reconnect generations. */
     assert(client.callbacks.publish_cb(&client, 6, "down", 6, 6, "abcdef") == 0);
     client.callbacks.connack_cb(&client, 0, CM_MQTT_CONN_STATE_NET_ERR);
     client.callbacks.connack_cb(&client, 0, 0);
-    ml_poll(m, 0);
-    assert(received == 1 && !ml_online(m));
+    ml307y_poll(m, 0);
+    assert(received == 1 && !ml307y_online(m));
     client.callbacks.suback_cb(&client, client.id, 1, &qos);
-    ml_poll(m, 0);
-    assert(ml_online(m));
+    ml307y_poll(m, 0);
+    assert(ml307y_online(m));
     /* Queue overflow invalidates all pending events, including a delayed SUBACK. */
-    for (i = 0; i < ML_MQTT_EVENTS; ++i)
+    for (i = 0; i < ML307Y_MQTT_EVENTS; ++i)
     {
         assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == 0);
     }
     assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == -1);
-    ml_poll(m, 0);
+    ml307y_poll(m, 0);
     assert(faults > 0);
-    assert(!ml_online(m));
+    assert(!ml307y_online(m));
     while (osMessageQueueGetCount(m->events))
     {
-        ml_poll(m, now_ms);
+        ml307y_poll(m, now_ms);
     }
     now_ms = 5000;
     connect_ready(m);
-    assert(ml_publish(m, "up", (const uint8_t *)"alarm", 5, 1, false, 42) == KW_CLOUD_OK);
+    assert(ml307y_publish(m, "up", (const uint8_t *)"alarm", 5, 1, false, 42) == KAIWAN_CLOUD_OK);
     now_ms += config.command_timeout_ms;
-    ml_poll(m, now_ms);
-    assert(!m->publishing && tx_done == 1);
+    ml307y_poll(m, now_ms);
+    assert(!m->publishing && transmit_done == 1);
     client.callbacks.puback_cb(&client, client.id, 0);
-    ml_poll(m, now_ms);
-    assert(tx_done == 1);
-    assert(ml_stop(m));
-    assert(!ml_online(m));
-    assert(ml_start(m, &config, &callbacks) == KW_CLOUD_OK);
-    ml_poll(m, now_ms);
+    ml307y_poll(m, now_ms);
+    assert(transmit_done == 1);
+    assert(ml307y_stop(m));
+    assert(!ml307y_online(m));
+    assert(ml307y_start(m, &config, &callbacks) == KAIWAN_CLOUD_OK);
+    ml307y_poll(m, now_ms);
     assert(m->connecting);
     now_ms += config.command_timeout_ms;
-    ml_poll(m, now_ms);
-    assert(!m->connecting && !ml_online(m));
+    ml307y_poll(m, now_ms);
+    assert(!m->connecting && !ml307y_online(m));
     puts("CM MQTT: SUBACK gate, fragments, deep copy, PUBACK, generation and overflow OK");
     return 0;
 }

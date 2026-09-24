@@ -42,7 +42,7 @@ def main():
         assert receipt["entry"] in names
         if product == "template_test":
             assert "alarm_product_start" not in names
-            assert not any(n.startswith(("ar_", "al_reporter_", "kw_protocol_")) for n in names)
+            assert not any(n.startswith(("ar_", "al_reporter_", "kw_protocol_", "alarm_", "kaiwan_")) for n in names)
         elif product == "alarm_button":
             assert "template_product_start" not in names
         if product in ("alarm_button", "template_test"):

@@ -2,14 +2,15 @@
 from pathlib import Path
 import hashlib
 import json
+import os
 import re
 
 MODULES = {
     "key": ["src/key.c"],
     "indicator": ["src/indicator.c"],
     "reporting": ["src/alarm_button/alarm_core.c"],
-    "kaiwan": ["src/kaiwan/kw_protocol.c", "src/kaiwan/kw_session.c"],
-    "mqtt": ["src/mqtt/mqtt_config.c", "src/mqtt/mqtt_rx.c", "src/ml307y/mqtt_port.c"],
+    "kaiwan": ["src/kaiwan/kaiwan_protocol.c", "src/kaiwan/kaiwan_session.c"],
+    "mqtt": ["src/mqtt/mqtt_config.c", "src/mqtt/mqtt_receive.c", "src/ml307y/mqtt_port.c"],
     "storage": ["src/snapshot_store.c", "src/ml307y/file_port.c"],
 }
 PLATFORM_SOURCES = ["project/src/ml307y/diag_uart.c",
@@ -118,6 +119,10 @@ def apply(env, root, arguments):
     output = base if target == "kernel" else variant
     generated = output / "generated"
     env["PROJECT_MODE"] = True
+    # 厂商 SCons 默认只转发 PATH；保留调用者指定的工程内临时目录。
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        if name in os.environ:
+            env["ENV"][name] = os.environ[name]
     env["PROJECT_SPEC"] = spec
     env["PROJECT_BASE_ID"] = base_id
     env["PROJECT_BASE_ROOT"] = str(base)
@@ -136,7 +141,7 @@ def apply(env, root, arguments):
         if not provision.is_file():
             raise ValueError("Provision header must exist within project")
         env["PROJECT_PROVISION"] = str(provision)
-        env.Append(CPPDEFINES=[("AB_PROVISION_HEADER", "<product_private_config.h>")])
+        env.Append(CPPDEFINES=[("ALARM_BUTTON_PROVISION_HEADER", "<product_private_config.h>")])
     env.PrependUnique(CPPPATH=[str(generated)])
     SConsignFile(str(output / ".sconsign.dblite"))
     if not GetOption("no_exec") and not GetOption("clean"):
@@ -157,7 +162,7 @@ def apply(env, root, arguments):
             '#define PRODUCT_STORAGE_NAMESPACE "' + spec["storage_namespace"] + '"']
         for field, default in [("key_sdk_pin",-1),("led_sdk_pin",-1),("buzzer_sdk_pin",16),
                                ("pinmap_verified",False),("wake_verified",False),("buzzer_hz",0)]:
-            header.append("#define AB_" + field.upper() + " " + str(int(spec.get(field, default))))
+            header.append("#define ALARM_BUTTON_" + field.upper() + " " + str(int(spec.get(field, default))))
         (generated / "product_build_config.h").write_text("\n".join(header)+"\n", encoding="utf-8")
         (output / "product-manifest.json").write_text(json.dumps(
             {"product":spec,"base_id":base_id,"target":target},indent=2),encoding="utf-8")

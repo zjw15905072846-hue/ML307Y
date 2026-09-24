@@ -1,10 +1,10 @@
 #pragma once
 /*------------------------------------------includes--------------------------------------------*/
-#include "storage_if.h"
+#include "storage_interface.h"
 /*-------------------------------------------define---------------------------------------------*/
-#define SNAPSHOT_MAX_PAYLOAD 2048U /* 单个产品镜像的容量上限。 */
+#define SNAPSHOT_MAXIMUM_PAYLOAD 2048U /* 单个产品镜像的容量上限。 */
 #define SNAPSHOT_HEADER_BYTES 32U /* 身份、版本、代数及 CRC 的固定头长度。 */
-#define SNAPSHOT_BYTES (SNAPSHOT_HEADER_BYTES + SNAPSHOT_MAX_PAYLOAD)
+#define SNAPSHOT_BYTES (SNAPSHOT_HEADER_BYTES + SNAPSHOT_MAXIMUM_PAYLOAD)
 
 /*-------------------------------------------typedef---------------------------------------------*/
 /* 双文件槽的介质操作；slot 仅允许 0 或 1。 */
@@ -19,12 +19,12 @@ typedef struct
     bool (*write_sync)(void *user, unsigned slot, const void *data, size_t size);
     /* 复用损坏槽前留存原文件；失败时禁止覆盖该槽。 */
     bool (*preserve)(void *user, unsigned slot);
-} snapshot_file_if_t;
+} snapshot_file_interface_t;
 
 /* 同一产品独占一个上下文，代数只在回读校验成功后推进。 */
 typedef struct
 {
-    snapshot_file_if_t files;
+    snapshot_file_interface_t files;
     uint32_t product_id; /* 阻止加载其他产品的镜像。 */
     uint64_t generation; /* 最近完整提交的代数。 */
     size_t payload_size; /* 当前产品镜像的固定字节数。 */
@@ -38,5 +38,5 @@ typedef struct
 
 /*-------------------------------------------function---------------------------------------------*/
 /* 绑定双槽接口；真正读取时先检查两槽，未知格式保持原样并禁止写入。 */
-storage_if_t snapshot_storage(snapshot_store_t *store, uint32_t product_id,
-                              const snapshot_file_if_t *files);
+storage_interface_t snapshot_storage(snapshot_store_t *store, uint32_t product_id,
+                              const snapshot_file_interface_t *files);

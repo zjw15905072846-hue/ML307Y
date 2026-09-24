@@ -4,4 +4,4 @@
 /*-------------------------------------------function---------------------------------------------*/
 /* 有界检查字符串是否以零结束，并返回长度；越界或未终止返回 0。 */
 /* 配置校验和平台适配共用此入口，避免对固定容量字段做无界扫描。 */
-int kw_cloud_text_length(const char *text, size_t capacity, size_t *length);
+int kaiwan_cloud_text_length(const char *text, size_t capacity, size_t *length);

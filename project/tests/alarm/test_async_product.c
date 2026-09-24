@@ -32,16 +32,16 @@ static bool capture_output(void *user, bool l, bool b)
 * Description    : 模拟持久化工人长时间忙碌，只接收请求
 * Input          : user - 保留；token - 请求；event - 快照
 * Output         : request及提交次数
-* Return         : AL_OK
+* Return         : ALARM_OK
 * Attention      : 故意不返回保存结果
 *******************************************************************************/
-static int queue_submit(void *user, uint32_t token, const al_event_t *event)
+static int queue_submit(void *user, uint32_t token, const alarm_event_t *event)
 {
     (void)user;
     assert(event->event_type == 0x0c);
     request = token;
     ++submissions;
-    return AL_OK;
+    return ALARM_OK;
 }
 
 /*******************************************************************************
@@ -54,44 +54,44 @@ static int queue_submit(void *user, uint32_t token, const al_event_t *event)
 *******************************************************************************/
 int main(void)
 {
-    ab_app_t app;
-    ab_config_t config = ab_default_config();
-    ab_io_t io = {0, capture_output, 0, queue_submit};
+    alarm_button_state_t button_state;
+    alarm_button_config_t config = alarm_button_default_config();
+    alarm_button_callbacks_t callbacks = {0, capture_output, 0, queue_submit};
     uint32_t first;
     unsigned cycle;
-    assert(ab_init(&app, &config, &io, NULL, NULL) == AL_OK);
-    ab_poll(&app, true, 0, NULL);
-    ab_poll(&app, true, 30, NULL);
+    assert(alarm_button_init(&button_state, &config, &callbacks) == ALARM_OK);
+    alarm_button_update(&button_state, true, 0);
+    alarm_button_update(&button_state, true, 30);
     first = request;
     assert(submissions == 1 && led && !buzzer);
-    assert(app.latest_event_id == 0 && app.pending_saves == 1);
+    assert(button_state.indicator.event_id == 0 && button_state.pending_save_count == 1);
     for (cycle = 0; cycle < 6; ++cycle)
     {
-        ab_poll(&app, true, 1030 + cycle * 500, NULL);
+        alarm_button_update(&button_state, true, 1030 + cycle * 500);
         assert(led && buzzer);
-        ab_poll(&app, true, 1280 + cycle * 500, NULL);
+        alarm_button_update(&button_state, true, 1280 + cycle * 500);
         assert(!led && !buzzer);
     }
-    ab_poll(&app, true, 4030, NULL);
+    alarm_button_update(&button_state, true, 4030);
     assert(led && !buzzer);
-    ab_poll(&app, false, 4050, NULL);
-    ab_poll(&app, false, 4080, NULL);
-    ab_poll(&app, true, 4100, NULL);
-    ab_poll(&app, true, 4130, NULL);
+    alarm_button_update(&button_state, false, 4050);
+    alarm_button_update(&button_state, false, 4080);
+    alarm_button_update(&button_state, true, 4100);
+    alarm_button_update(&button_state, true, 4130);
     assert(request != first && submissions == 2);
-    ab_saved(&app, first, 11, AL_OK);
-    ab_confirmed(&app, 11);
-    ab_poll(&app, true, 8130, NULL);
-    assert(led && !buzzer && app.latest_event_id == 0);
-    ab_saved(&app, request, 12, AL_OK);
-    ab_confirmed(&app, 11);
-    ab_poll(&app, true, 9000, NULL);
+    alarm_button_on_save_result(&button_state, first, 11, ALARM_OK);
+    alarm_button_on_alarm_confirmed(&button_state, 11);
+    alarm_button_update(&button_state, true, 8130);
+    assert(led && !buzzer && button_state.indicator.event_id == 0);
+    alarm_button_on_save_result(&button_state, request, 12, ALARM_OK);
+    alarm_button_on_alarm_confirmed(&button_state, 11);
+    alarm_button_update(&button_state, true, 9000);
     assert(led);
-    ab_confirmed(&app, 12);
-    ab_poll(&app, true, 9001, NULL);
-    assert(!led && !buzzer && app.pending_saves == 0);
-    ab_saved(&app, request, 12, AL_OK);
-    assert(app.pending_saves == 0);
-    puts("async UI: delayed persistence, full six cycles and request/ACK isolation passed");
+    alarm_button_on_alarm_confirmed(&button_state, 12);
+    alarm_button_update(&button_state, true, 9001);
+    assert(!led && !buzzer && button_state.pending_save_count == 0);
+    alarm_button_on_save_result(&button_state, request, 12, ALARM_OK);
+    assert(button_state.pending_save_count == 0);
+    puts("async UI: delayed persistence, full six cycles and request/confirmation isolation passed");
     return 0;
 }

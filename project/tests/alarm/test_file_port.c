@@ -100,17 +100,17 @@ int32_t cm_fs_sync(int32_t fd)
 /*******************************************************************************
 * Function Name  : cm_fs_write
 * Description    : 模拟正数短写或零写
-* Input          : fd/buf/size - 请求
+* Input          : fd/buffer/size - 请求
 * Output         : 缓冲和位置
 * Return         : 实际写入量
 * Attention      : 正数短写应继续完成
 *******************************************************************************/
-int32_t cm_fs_write(int32_t fd, const void *buf, uint32_t size)
+int32_t cm_fs_write(int32_t fd, const void *buffer, uint32_t size)
 {
     uint32_t n = size > chunk ? chunk : size;
     assert(fd == 3 && position + n <= sizeof(bytes));
     ++writes;
-    memcpy(bytes + position, buf, n);
+    memcpy(bytes + position, buffer, n);
     position += n;
     length = position;
     return (int32_t)n;
@@ -119,16 +119,16 @@ int32_t cm_fs_write(int32_t fd, const void *buf, uint32_t size)
 /*******************************************************************************
 * Function Name  : cm_fs_read
 * Description    : 模拟正数短读或EOF
-* Input          : fd/buf/size - 请求
-* Output         : buf
+* Input          : fd/buffer/size - 请求
+* Output         : buffer
 * Return         : 实际读取量
 * Attention      : 不能把未完成读取当正常镜像
 *******************************************************************************/
-int32_t cm_fs_read(int32_t fd, void *buf, uint32_t size)
+int32_t cm_fs_read(int32_t fd, void *buffer, uint32_t size)
 {
     uint32_t n = size > chunk ? chunk : size;
     assert(fd == 3 && position + n <= length);
-    memcpy(buf, bytes + position, n);
+    memcpy(buffer, bytes + position, n);
     position += n;
     return (int32_t)n;
 }
@@ -173,12 +173,12 @@ int main(void)
 {
     product_services_t first = {0};
     product_services_t second = {0};
-    ml_file_store_t *f;
-    ml_file_store_t *s;
+    ml307y_file_store_t *f;
+    ml307y_file_store_t *s;
     uint8_t output[16];
     size_t actual;
     unsigned before;
-    al_store_t queue;
+    alarm_event_store_t queue;
     raw_probe = -2;
     assert(project_fs_probe("products/alarm_button/alarm.a") == STORAGE_EMPTY);
     raw_probe = -5;
@@ -190,33 +190,33 @@ int main(void)
     first.storage_namespace = "alarm_button";
     second.product_id = 0x54500101;
     second.storage_namespace = "template_test";
-    assert(ml_storage_create(&first) && ml_storage_create(&second));
+    assert(ml307y_storage_create(&first) && ml307y_storage_create(&second));
     f = first.storage.user;
     s = second.storage.user;
     assert(strcmp(f->paths[0], s->paths[0]) != 0 && opens == 0);
     before = writes;
-    assert(al_store_open(&queue, first.product_id, &first.storage) == AL_ERR_STORAGE);
+    assert(alarm_store_open(&queue, first.product_id, &first.storage) == ALARM_ERROR_STORAGE);
     assert(writes == before && opens == 0);
     raw_probe = 0;
     assert(project_fs_probe(f->paths[0]) == STORAGE_OK);
-    assert(ml_file_write(f, 0, "abcdefgh", 8));
+    assert(ml307y_file_write(f, 0, "abcdefgh", 8));
     assert(writes == before + 3 && length == 8);
-    assert(ml_file_read(f, 0, output, sizeof(output), &actual) == STORAGE_OK);
+    assert(ml307y_file_read(f, 0, output, sizeof(output), &actual) == STORAGE_OK);
     assert(actual == 8 && memcmp(output, "abcdefgh", 8) == 0);
     chunk = 0;
-    assert(!ml_file_write(f, 1, "x", 1));
+    assert(!ml307y_file_write(f, 1, "x", 1));
     chunk = 3;
     sync_error = -1;
-    assert(!ml_file_write(f, 1, "x", 1));
+    assert(!ml307y_file_write(f, 1, "x", 1));
     sync_error = 0;
     close_error = -1;
-    assert(!ml_file_write(f, 1, "x", 1));
-    assert(ml_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
+    assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(ml307y_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
     close_error = 0;
     open_error = 1;
-    assert(!ml_file_write(f, 1, "x", 1));
-    assert(ml_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
-    puts("CM file: raw missing vs IO, namespaces, chunked IO, zero write, sync/open/close failures "
+    assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(ml307y_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
+    puts("CM file: missing vs I/O errors, namespaces, chunked I/O, zero write, sync/open/close failures "
          "OK");
     return 0;
 }
