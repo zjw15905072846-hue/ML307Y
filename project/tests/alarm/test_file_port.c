@@ -9,13 +9,21 @@
 static int raw_probe;
 static int open_error;
 static int sync_error;
+static unsigned sync_failure_call;
+static unsigned sync_calls;
 static int close_error;
+static int write_error;
+static int volume_mode; /* 1：旧目标占满空间；2：其他文件占满，截断也不能回收。 */
+static bool truncated_metadata_committed;
+static unsigned active_slot_opens;
+static unsigned no_space_writes;
 static unsigned opens;
 static unsigned writes;
 static uint32_t chunk = 3;
 static uint32_t position;
 static uint32_t length;
 static uint8_t bytes[SNAPSHOT_BYTES];
+extern char alarm_mock_last_diagnostic[128];
 
 /*-------------------------------------------function---------------------------------------------*/
 /*******************************************************************************
@@ -57,14 +65,21 @@ int32_t cm_fs_open(const char *filename, int32_t flag)
 {
     assert(filename);
     ++opens;
+    if (volume_mode && strstr(filename, "alarm.b"))
+    {
+        ++active_slot_opens;
+    }
     if (open_error)
     {
         return -1;
     }
     position = 0;
+    sync_calls = 0;
     if (flag == CM_FS_WB)
     {
         length = 0;
+        /* TRUNC 先改内存状态；旧数据块仍被尚未提交的目录项引用。 */
+        truncated_metadata_committed = false;
     }
     return 3;
 }
@@ -94,7 +109,33 @@ int32_t cm_fs_close(int32_t fd)
 int32_t cm_fs_sync(int32_t fd)
 {
     assert(fd == 3);
-    return sync_error;
+    ++sync_calls;
+    if (sync_error && (!sync_failure_call || sync_calls == sync_failure_call))
+    {
+        return sync_error;
+    }
+    if (length == 0)
+    {
+        truncated_metadata_committed = true;
+    }
+    return 0;
+}
+
+/*******************************************************************************
+* Function Name  : cm_fs_getinfo
+* Description    : 模拟三层目录与双快照占用的 32 KiB 小容量文件系统
+* Input          : info - 容量输出地址
+* Output         : 当前空闲和总字节数
+* Return         : 0 - 查询成功
+* Attention      : 只模拟分配约束，不代替 SDK LittleFS 或实板运行
+*******************************************************************************/
+int32_t cm_fs_getinfo(cm_fs_system_info_t *info)
+{
+    assert(info);
+    memset(info, 0, sizeof(*info));
+    info->total_size = 32768U;
+    info->free_size = !volume_mode || (volume_mode == 1 && truncated_metadata_committed) ? 4096U : 0U;
+    return 0;
 }
 
 /*******************************************************************************
@@ -110,6 +151,15 @@ int32_t cm_fs_write(int32_t fd, const void *buffer, uint32_t size)
     uint32_t n = size > chunk ? chunk : size;
     assert(fd == 3 && position + n <= sizeof(bytes));
     ++writes;
+    if (write_error)
+    {
+        return write_error;
+    }
+    if (volume_mode == 2 || (volume_mode == 1 && !truncated_metadata_committed))
+    {
+        ++no_space_writes;
+        return -28;
+    }
     memcpy(bytes + position, buffer, n);
     position += n;
     length = position;
@@ -162,6 +212,70 @@ int32_t cm_fs_move(const char *src, const char *dest)
 }
 
 /*******************************************************************************
+* Function Name  : test_full_volume_snapshot_reuse
+* Description    : 重现满卷覆盖旧快照时的负 28，并验证失败不触碰活动槽
+* Input          : file_store - 真实文件适配上下文；storage - 双快照接口
+* Output         : 提交结果、槽归属和错误传播断言
+* Return         : 无
+* Attention      : 模拟目录项提交前保留旧块；不删除文件、不宣称实板通过
+*******************************************************************************/
+static void test_full_volume_snapshot_reuse(ml307y_file_store_t *file_store,
+                                          storage_interface_t *storage)
+{
+    uint8_t payload[sizeof(alarm_storage_image_t)];
+    unsigned before;
+    bool committed;
+    memset(payload, 0x5a, sizeof(payload));
+    chunk = SNAPSHOT_BYTES;
+    volume_mode = 1;
+    file_store->snapshots.ready = true;
+    file_store->snapshots.active = 1;
+    file_store->snapshots.generation = 7;
+    file_store->snapshots.payload_size = sizeof(payload);
+    committed = storage->write(storage->user, payload, sizeof(payload));
+    if (!committed)
+    {
+        fprintf(stderr, "%s\n", alarm_mock_last_diagnostic);
+    }
+    assert(committed);
+    assert(length == 1980U && no_space_writes == 0);
+    assert(file_store->snapshots.active == 0 && file_store->snapshots.generation == 8);
+    assert(active_slot_opens == 0);
+
+    /* 截断同步失败时不开始写新内容，也不改变活动槽和代数。 */
+    file_store->snapshots.active = 1;
+    file_store->snapshots.generation = 7;
+    sync_error = -5;
+    sync_failure_call = 1;
+    before = writes;
+    assert(!storage->write(storage->user, payload, sizeof(payload)));
+    assert(writes == before && !file_store->snapshots.ready);
+    assert(file_store->snapshots.active == 1 && file_store->snapshots.generation == 7);
+    assert(strstr(alarm_mock_last_diagnostic, "stage=truncate-sync slot=0 result=-5"));
+    sync_error = 0;
+    sync_failure_call = 0;
+
+    /* 已释放目标旧块后仍可能发生写入故障；最后完整槽继续保留。 */
+    file_store->snapshots.ready = true;
+    write_error = -5;
+    assert(!storage->write(storage->user, payload, sizeof(payload)));
+    assert(!file_store->snapshots.ready && file_store->snapshots.active == 1);
+    assert(file_store->snapshots.generation == 7 && active_slot_opens == 0);
+    write_error = 0;
+
+    /* 真正满卷仍应失败并暴露负 28，不能靠忽略错误宣布提交。 */
+    file_store->snapshots.ready = true;
+    volume_mode = 2;
+    assert(!storage->write(storage->user, payload, sizeof(payload)));
+    assert(no_space_writes == 1 && active_slot_opens == 0);
+    assert(!file_store->snapshots.ready && file_store->snapshots.active == 1);
+    assert(file_store->snapshots.generation == 7);
+    assert(strstr(alarm_mock_last_diagnostic, "stage=write slot=0 result=-28"));
+    volume_mode = 0;
+    chunk = 3;
+}
+
+/*******************************************************************************
 * Function Name  : main
 * Description    : 验证真实CM文件适配错误路径和产品命名空间
 * Input          : 无
@@ -203,20 +317,30 @@ int main(void)
     assert(writes == before + 3 && length == 8);
     assert(ml307y_file_read(f, 0, output, sizeof(output), &actual) == STORAGE_OK);
     assert(actual == 8 && memcmp(output, "abcdefgh", 8) == 0);
+    test_full_volume_snapshot_reuse(f, &first.storage);
     chunk = 0;
     assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(strstr(alarm_mock_last_diagnostic, "stage=write slot=1 result=0") != NULL);
     chunk = 3;
     sync_error = -1;
+    sync_failure_call = 2;
     assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(strstr(alarm_mock_last_diagnostic, "stage=sync slot=1 result=-1") != NULL);
     sync_error = 0;
+    sync_failure_call = 0;
     close_error = -1;
     assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(strstr(alarm_mock_last_diagnostic, "stage=close-write slot=1 result=-1") != NULL);
     assert(ml307y_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
+    assert(strstr(alarm_mock_last_diagnostic, "stage=close-read slot=1 result=-1") != NULL);
     close_error = 0;
     open_error = 1;
     assert(!ml307y_file_write(f, 1, "x", 1));
+    assert(strstr(alarm_mock_last_diagnostic, "stage=open-write slot=1 result=-1") != NULL);
     assert(ml307y_file_read(f, 1, output, sizeof(output), &actual) == STORAGE_IO_ERROR);
-    puts("CM file: missing vs I/O errors, namespaces, chunked I/O, zero write, sync/open/close failures "
+    assert(strstr(alarm_mock_last_diagnostic, "stage=open-read slot=1 result=-1") != NULL);
+    puts("CM file: full-volume snapshot reuse, active-slot preservation, missing vs I/O errors, "
+         "chunked I/O and write/sync/open/close failures "
          "OK");
     return 0;
 }

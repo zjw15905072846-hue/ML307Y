@@ -84,14 +84,31 @@ python project/tools/build_product.py desk_caller
 
 snapshot_store 支持的当前有效载荷上限为 2048 字节；改变结构前检查容量和版本。未知版本、外来产品或读取错误必须停止写入并报告，不能恢复默认后覆盖数据。旧门禁以后迁入时也应走独立产品和命名空间，本轮不搬旧 Flash 的前后 8 KiB 布局。
 
-铠湾手报类型 0x04、紧急事件 0x0C 和 22 小时业务心跳属于 alarm_button。新增其他设备类型应编写对应 devices 编码器并配置自己的周期。通用 MQTT 当前 CM 适配只支持 QoS 1、单个下行订阅与一个在途发布；扩展其他模式时先添加异步和异常测试。
+铠湾手报类型 0x04、紧急事件 0x0C 和 12 小时业务心跳属于 alarm_button。心跳周期由 ALARM_BUTTON_HEARTBEAT_HOURS 宏控制，与 MQTT keepalive 秒数分开；默认上电注册与首次心跳流程保持原样，后续按配置周期调度。新增其他设备类型应编写对应 devices 编码器并配置自己的周期。通用 MQTT 当前 CM 适配只支持 QoS 1、单个下行订阅与一个在途发布；扩展其他模式时先添加异步和异常测试。
 
 ## 本地平台参数
 
 报警使用 product 私有头文件覆盖 provisioning.h 的默认值。把文件放在 project/private/（已经加入忽略规则），然后：
 
 ```powershell
-python project/tools/build_product.py alarm_button --provision project/private/alarm_lab.h
+python project/tools/build_product.py alarm_button --provision project/private/alarm_cloud.h
 ```
 
 头文件可配置 Broker、账户、AES 密钥、32 字节厂商码、厂商 ID、协议确认标志、未知遥测编码、历史补报方式及 TLS 证书配置。不要把凭据写入公共接口、测试或构建日志。先通过平台样例确认，不能照抄虚构测试值上线。
+
+本板当前使用[平台宏配置头文件](/D:/keil5/ML307Y/ML307Y-DL_OpenCPU_1.0.0.2609141255_rel/project/private/alarm_cloud.h:1)。服务器、端口、MQTT 账号与密码、AES 密钥、心跳小时数和厂商信息都在这里修改。AES_KEY_TEXT 按 16 个 ASCII 字节用于 AES-128，与 MQTT_PASSWORD 独立；密钥长度不为 16 字节时编译拒绝。心跳允许 1～596 小时，保证当前 32 位毫秒计时的回卷比较有效。
+
+用户本次已提供域名、端口、最新 MQTT 账号与密码和 AES 密钥；MQTT 密码与 AES 密钥分别使用独立宏，即使当前值相同也不互相引用。厂商标识/厂商码与协议样例尚待补齐。CLOUD_ENABLED 与 PROTOCOL_VERIFIED 当前保持 0；这些资料确认后再启用，不能仅因配置头文件已创建就视为真实上报完成。构建时须显式带上上述 --provision 参数，避免使用未配置的公共默认值。
+
+## 蜂鸣器声频配置
+
+本板 XCL-5020ATP 使用物理 74 脚的 PWM0。只需修改[蜂鸣器参数宏](/D:/keil5/ML307Y/ML307Y-DL_OpenCPU_1.0.0.2609141255_rel/project/inc/ml307y/alarm_buzzer.h:8)：
+
+```c
+#define ALARM_BUZZER_FREQUENCY_HZ 4000U
+#define ALARM_BUZZER_DUTY_PERCENT 50U
+```
+
+频率单位为 Hz，允许 200～20000；发声占空比允许 1～99%，规格书标称条件为 4000 Hz、50%。静音固定 0%，上电初始化不鸣叫。修改后按上方命令带私有配置重新构建，不修改自动生成的头文件，也不在产品清单中添加旧 buzzer_hz 字段。清单继续负责 PIN:74 和 PWM:0 的资源占用。
+
+这是方波声频；报警前一秒静音、随后三秒每 250 ms 开/关的提示节奏保持原样。具体验证与烧录包见[本次蜂鸣器交付记录](/D:/keil5/ML307Y/ML307Y-DL_OpenCPU_1.0.0.2609141255_rel/project/docs/buzzer_frequency_20260928.md:1)。

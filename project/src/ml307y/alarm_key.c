@@ -2,21 +2,18 @@
 #include "ml307y/alarm_key.h"
 #include "ml307y/diag_uart.h"
 #include "key.h"
-#include "cm_gpio.h"
-#include "cm_iomux.h"
+#include "ml307y/base_gpio.h"
 
 /*-------------------------------------------define---------------------------------------------*/
 /*-------------------------------------------typedef---------------------------------------------*/
 typedef struct
 {
-    int sdk_pin;
-    void (*wake_notify)(void *);
-    void *wake_argument;
     bool initialized;
+    alarm_key_interface_t *interface;
 } alarm_key_device_t;
 
 /*-------------------------------------------variables-------------------------------------------*/
-/* SDK 中断没有 user 参数；当前构建只选择一块报警板。 */
+/* 当前构建只选择一块报警板；边沿唤醒后由前台读取并消抖。 */
 static alarm_key_device_t alarm_key_device;
 
 /*-------------------------------------------function---------------------------------------------*/
@@ -48,22 +45,6 @@ alarm_key_event_t alarm_key_sample(alarm_key_state_t *context, bool pressed, uin
 }
 
 /*******************************************************************************
-* Function Name  : ml307y_alarm_key_interrupt
-* Description    : 把按键边沿通知前台任务
-* Input          : 无
-* Output         : 零等待唤醒通知
-* Return         : 无
-* Attention      : 中断内不读写文件、联网或消抖
-*******************************************************************************/
-static void ml307y_alarm_key_interrupt(void)
-{
-    if (alarm_key_device.wake_notify)
-    {
-        alarm_key_device.wake_notify(alarm_key_device.wake_argument);
-    }
-}
-
-/*******************************************************************************
 * Function Name  : ml307y_alarm_key_read
 * Description    : 读取按下接地的并联逻辑按键
 * Input          : user - 按键器件；pressed - 输出地址
@@ -74,47 +55,47 @@ static void ml307y_alarm_key_interrupt(void)
 static bool ml307y_alarm_key_read(void *user, bool *pressed)
 {
     alarm_key_device_t *device = user;
-    cm_gpio_level_e level;
-    if (!device || !device->initialized || !pressed ||
-        cm_gpio_get_level((cm_gpio_num_e)device->sdk_pin, &level) != 0)
+    if (!device || !device->initialized || !pressed)
     {
         return false;
     }
-    *pressed = level == CM_GPIO_LEVEL_LOW;
-    return true;
+    return project_button_input_read(pressed) == 0;
 }
 
 /*******************************************************************************
 * Function Name  : ml307y_alarm_key_set_wakeup
-* Description    : 保存按键中断的前台唤醒通知
-* Input          : user - 按键器件；notify/argument - 通知函数及上下文
-* Output         : 按键器件的唤醒回调
+* Description    : 前台队列创建后装配按键中断唤醒通知
+* Input          : user - 按键器件；notify/argument - 零等待通知及上下文
+* Output         : wake_configured - 本次配置状态
 * Return         : 无
-* Attention      : 通知函数只投递消息
+* Attention      : 失败保留轮询与工作锁；配置成功不修改实板验证标志
 *******************************************************************************/
 static void ml307y_alarm_key_set_wakeup(void *user, void (*notify)(void *), void *argument)
 {
     alarm_key_device_t *device = user;
-    if (device && device->initialized)
+    int result;
+    if (!device || !device->initialized)
     {
-        device->wake_notify = notify;
-        device->wake_argument = argument;
+        return;
     }
+    result = project_button_wakeup_configure(notify, argument);
+    device->interface->wake_configured = result == 0;
+    ml307y_uart_diag_printf("[project][alarm-key-wakeup] configured=%u result=%d hardware_verified=0",
+                           (unsigned)device->interface->wake_configured, result);
 }
 
 /*******************************************************************************
 * Function Name  : ml307y_alarm_key_init
-* Description    : 直接配置 26 脚输入，按需注册已核验的唤醒中断
-* Input          : key - 产品按键接口；wake_verified - 中断唤醒已核验标志
-* Output         : 成功后绑定按键读取与唤醒接口
-* Return         : true - 初始化完成；false - SDK 操作失败
-* Attention      : 按本板接线直接试用 GPIO26；唤醒未核验时仅由前台轮询
+* Description    : 通过当前底包 AGPIO0 输入接口配置物理 26 脚
+* Input          : key - 产品按键接口；wake_verified - 本轮必须为 false
+* Output         : 成功后绑定轮询读取接口
+* Return         : true - 初始化完成；false - 配置、HAL 或首次读取失败
+* Attention      : 不把物理脚号传入 CM GPIO；前台保留工作锁及 30ms 消抖
 *******************************************************************************/
 bool ml307y_alarm_key_init(alarm_key_interface_t *key, bool wake_verified)
 {
-    cm_gpio_cfg_t input = {CM_GPIO_MODE_NUM, CM_GPIO_DIRECTION_INPUT, CM_GPIO_PULL_UP};
-    cm_gpio_level_e level;
-    int32_t error;
+    bool pressed;
+    int error;
     if (!key)
     {
         ml307y_uart_diag_printf("[project][alarm-key-interface] error=-1");
@@ -125,45 +106,32 @@ bool ml307y_alarm_key_init(alarm_key_interface_t *key, bool wake_verified)
         ml307y_uart_diag_printf("[project][alarm-key-already-initialized] error=-1");
         return false;
     }
-    error = cm_iomux_set_pin_func(CM_IOMUX_PIN_26, CM_IOMUX_FUNC_FUNCTION2);
-    if (error != 0)
-    {
-        ml307y_uart_diag_printf("[project][alarm-key-iomux] error=%d", error);
-        return false;
-    }
-    error = cm_gpio_init(CM_GPIO_NUM_26, &input);
-    if (error != 0)
-    {
-        ml307y_uart_diag_printf("[project][alarm-key-gpio-init] error=%d", error);
-        return false;
-    }
-    error = cm_gpio_get_level(CM_GPIO_NUM_26, &level);
-    if (error != 0)
-    {
-        ml307y_uart_diag_printf("[project][alarm-key-gpio-read] error=%d", error);
-        return false;
-    }
     if (wake_verified)
     {
-        error = cm_gpio_interrupt_register(CM_GPIO_NUM_26, ml307y_alarm_key_interrupt);
-        if (error != 0)
-        {
-            ml307y_uart_diag_printf("[project][alarm-key-irq-register] error=%d", error);
-            return false;
-        }
-        error = cm_gpio_interrupt_enable(CM_GPIO_NUM_26, CM_GPIO_IT_EDGE_BOTH);
-        if (error != 0)
-        {
-            ml307y_uart_diag_printf("[project][alarm-key-irq-enable] error=%d", error);
-            return false;
-        }
+        ml307y_uart_diag_printf("[project][alarm-key-wakeup] polling required");
+        return false;
     }
-    alarm_key_device.sdk_pin = CM_GPIO_NUM_26;
+    ml307y_uart_diag_printf("[project] alarm key init pin=26 hal=AGPIO0 polling");
+    error = project_button_input_init();
+    if (error != 0)
+    {
+        ml307y_uart_diag_printf("[project][alarm-key-hal-init] error=%d", error);
+        return false;
+    }
+    error = project_button_input_read(&pressed);
+    if (error != 0)
+    {
+        ml307y_uart_diag_printf("[project][alarm-key-hal-read] error=%d", error);
+        return false;
+    }
     alarm_key_device.initialized = true;
     key->user = &alarm_key_device;
     key->read = ml307y_alarm_key_read;
-    key->set_wakeup = wake_verified ? ml307y_alarm_key_set_wakeup : NULL;
-    key->wake_verified = wake_verified;
+    alarm_key_device.interface = key;
+    key->set_wakeup = ml307y_alarm_key_set_wakeup;
+    key->wake_configured = false;
+    key->wake_verified = false;
     key->ready = true;
+    ml307y_uart_diag_printf("[project] alarm key initial pressed=%u", (unsigned)pressed);
     return true;
 }

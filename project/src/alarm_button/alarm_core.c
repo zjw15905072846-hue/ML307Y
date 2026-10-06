@@ -175,27 +175,35 @@ int alarm_store_enqueue(alarm_event_store_t *store, const alarm_event_t *event, 
 
 /*******************************************************************************
 * Function Name  : alarm_store_remove
-* Description    : 仅在平台确认后原子删除指定队首
-* Input          : store - 队列；id - 已业务确认的队首事件
-* Output         : 原子删除匹配队首，保留其他事件
+* Description    : 仅在平台确认后原子删除指定事件
+* Input          : store - 队列；id - 已业务确认的事件
+* Output         : 原子删除匹配事件，保留其他事件及其原有顺序
 * Return         : ALARM_OK或过期/存储错误
 * Attention      : 调用方必须先验证平台业务回执
 *******************************************************************************/
 int alarm_store_remove(alarm_event_store_t *store, uint32_t id)
 {
+    unsigned index;
     if (!store || !store->ready)
     {
         return ALARM_ERROR_NOT_READY;
     }
-    if (!store->image.count || store->image.events[0].id != id)
+    for (index = 0; index < store->image.count; ++index)
+    {
+        if (store->image.events[index].id == id)
+        {
+            break;
+        }
+    }
+    if (index == store->image.count)
     {
         return ALARM_ERROR_STALE;
     }
     store->staging = store->image;
-    /* 只删除已确认的队首，其他记录仍按原顺序保留。 */
+    /* 只删除已确认 ID；跳过的待补报记录及其他未确认记录保持原序。 */
     store->staging.count--;
-    memmove(store->staging.events, store->staging.events + 1,
-            store->staging.count * sizeof(alarm_event_t));
+    memmove(store->staging.events + index, store->staging.events + index + 1,
+            (store->staging.count - index) * sizeof(alarm_event_t));
     memset(&store->staging.events[store->staging.count], 0, sizeof(alarm_event_t));
     return alarm_commit(store);
 }
@@ -278,7 +286,7 @@ static void alarm_retry(alarm_event_reporter_t *context, uint32_t now)
 
 /*******************************************************************************
 * Function Name  : alarm_reporter_poll
-* Description    : 在线且退避到期时发送队首，排队超时也受控重试
+* Description    : 在线且退避到期时发送最早可发送事件，排队超时也受控重试
 * Input          : context - 上报上下文；online - 可上报；now - 当前毫秒
 * Output         : 按需分配序号、发送队首或安排退避
 * Return         : 无；错误见last_error
@@ -287,6 +295,8 @@ static void alarm_retry(alarm_event_reporter_t *context, uint32_t now)
 void alarm_reporter_poll(alarm_event_reporter_t *context, bool online, uint32_t now)
 {
     int result;
+    unsigned index;
+    const alarm_event_t *event = NULL;
     if (!context || !context->store || !context->store->ready || !context->send || context->last_error == ALARM_ERROR_CONFIG)
     {
         return;
@@ -308,6 +318,22 @@ void alarm_reporter_poll(alarm_event_reporter_t *context, bool online, uint32_t 
         return;
     }
     context->retry_wait = false;
+    /* 未满足补报或遥测条件的旧记录保留；选取最早可以发送的记录。 */
+    for (index = 0; index < context->store->image.count; ++index)
+    {
+        const alarm_event_t *candidate = &context->store->image.events[index];
+        if (!context->event_ready || context->event_ready(context->user, candidate))
+        {
+            event = candidate;
+            break;
+        }
+    }
+    if (!event)
+    {
+        context->last_error = ALARM_ERROR_NOT_READY;
+        alarm_retry(context, now);
+        return;
+    }
     /* 序号先持久分配，再尝试传输；重启后不会误认旧回执。 */
     result = alarm_store_sequence(context->store, &context->sequence);
     if (result)
@@ -316,14 +342,14 @@ void alarm_reporter_poll(alarm_event_reporter_t *context, bool online, uint32_t 
         alarm_retry(context, now);
         return;
     }
-    if (context->event_id != context->store->image.events[0].id)
+    if (context->event_id != event->id)
     {
         memset(context->attempts, 0, sizeof(context->attempts));
-        context->event_id = context->store->image.events[0].id;
+        context->event_id = event->id;
     }
     context->inflight = true;
     context->sent_at = now;
-    if (!context->send(context->user, &context->store->image.events[0], context->sequence))
+    if (!context->send(context->user, event, context->sequence))
     {
         context->last_error = ALARM_ERROR_NOT_READY;
         alarm_retry(context, now);
@@ -336,7 +362,7 @@ void alarm_reporter_poll(alarm_event_reporter_t *context, bool online, uint32_t 
 
 /*******************************************************************************
 * Function Name  : alarm_reporter_on_platform_confirmation
-* Description    : 检查当前序号和队首归属，原子删除后返回已完成事件ID
+* Description    : 检查当前序号和事件归属，原子删除后返回已完成事件ID
 * Input          : context - 上报上下文；sequence/response - 已验证业务回执；now - 毫秒；completed_id - 完成ID
 * Output         : 持久删除成功才输出completed_id，其他情况为0
 * Return         : ALARM_OK或过期/拒绝/存储错误

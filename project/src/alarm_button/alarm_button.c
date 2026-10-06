@@ -77,12 +77,15 @@ static void alarm_button_record_fault(alarm_button_state_t *button_state, int er
 * Input          : button_state - 前台状态；led/buzzer - 目标状态
 * Output         : 两个器件的实际输出
 * Return         : true - 均成功；false - 某个器件失败
-* Attention      : 前一个器件失败时不继续写下一个器件
+* Attention      : 两个器件均执行，LED失败不能跳过蜂鸣器关闭
 *******************************************************************************/
 static bool alarm_button_set_outputs(alarm_button_state_t *button_state, bool led, bool buzzer)
 {
-    return button_state->callbacks.set_led(button_state->callbacks.user, led) &&
-           button_state->callbacks.set_buzzer(button_state->callbacks.user, buzzer);
+    bool led_result;
+    bool buzzer_result;
+    led_result = button_state->callbacks.set_led(button_state->callbacks.user, led);
+    buzzer_result = button_state->callbacks.set_buzzer(button_state->callbacks.user, buzzer);
+    return led_result && buzzer_result;
 }
 
 /*******************************************************************************
@@ -144,7 +147,7 @@ void alarm_button_update(alarm_button_state_t *button_state, bool pressed, uint3
 * Input          : button_state - 产品上下文
 * Output         : 无
 * Return         : true - 本地业务已静止；false - 仍有工作或故障
-* Attention      : 平台层还须确认网络已退出、后台查询已完成且唤醒已验证
+* Attention      : 平台层合并前后台工作锁，并确认按键唤醒已配置
 *******************************************************************************/
 bool alarm_button_can_sleep(const alarm_button_state_t *button_state)
 {
@@ -154,7 +157,7 @@ bool alarm_button_can_sleep(const alarm_button_state_t *button_state)
     {
         return false;
     }
-    /* 后台在网络退出且持久队列为空时才会报告静止。 */
+    /* 后台在保持连接、业务完成且持久队列为空时报告静止。 */
     return button_state->background_idle;
 }
 

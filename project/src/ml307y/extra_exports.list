@@ -1,6 +1,12 @@
 project_base_identity
 project_fs_probe
 project_random_bytes
+project_mqtt_local_address
+project_button_input_init
+project_button_input_read
+project_button_wakeup_configure
+project_led_output_init
+project_led_output_write
 mbedtls_aes_init
 mbedtls_aes_free
 mbedtls_aes_setkey_enc

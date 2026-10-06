@@ -88,9 +88,28 @@ def select(root, arguments):
                 configured_pins.append(pin)
     if len(configured_pins) != len(set(configured_pins)):
         raise ValueError("Device SDK pin collision")
-    if "buzzer" in devices and (type(product.get("buzzer_hz")) is not int or
-                                not 0 <= product["buzzer_hz"] <= 20000):
-        raise ValueError("Invalid buzzer frequency")
+    # ML307Y-DL: physical pins, CM GPIO IDs and private HAL IDs are separate domains.
+    required_pins = []
+    if "key" in devices:
+        if product.get("wake_verified", False) is not False:
+            raise ValueError("Physical pin 26 currently requires polling with the work lock")
+        required_pins.append(26)
+    if "led" in devices:
+        if product["led_sdk_pin"] not in (-1, 41):
+            raise ValueError("Physical pin 96 requires HAL GPIO_PIN_B (41), not a CM GPIO ID")
+        if product["led_sdk_pin"] == 41:
+            required_pins.append(96)
+    if "buzzer" in devices:
+        if product["buzzer_sdk_pin"] != 16:
+            raise ValueError("Physical pin 74 requires CM GPIO16")
+        if "PWM:0" not in resources:
+            raise ValueError("Physical pin 74 buzzer requires PWM:0")
+        if "buzzer_hz" in product:
+            raise ValueError("Set buzzer macros in project/inc/ml307y/alarm_buzzer.h")
+        required_pins.append(74)
+    for pin in required_pins:
+        if "PIN:" + str(pin) not in resources:
+            raise ValueError("Missing physical device resource: PIN:" + str(pin))
     if "STORE:" + product["storage_namespace"] not in resources:
         raise ValueError("Declare the product storage namespace in resources")
     sources = PLATFORM_SOURCES + product["sources"]
@@ -107,6 +126,13 @@ def select(root, arguments):
     product["sources"] = sources
     product["resources"] = resources
     product["include_dirs"] = INCLUDES
+    default_mode = "deep" if name == "alarm_button" else "light"
+    mode = arguments.get("sleep_mode", default_mode)
+    if mode not in ("light", "deep"):
+        raise ValueError("sleep_mode must be light or deep")
+    if name != "alarm_button" and mode != "light":
+        raise ValueError("DEEP validation is limited to alarm_button; other products retain LIGHT")
+    product["sleep_mode"] = mode
     return product
 
 def base_fingerprint(root):
@@ -115,6 +141,8 @@ def base_fingerprint(root):
     inputs += sorted((root / "kernel/prebuilts/open_mode/ld").glob("*"))
     inputs += [root / "kernel/export/open_mode/xy_export.list",
                root / "project/src/ml307y/base_bridge.c",
+               root / "project/src/ml307y/base_gpio.c",
+               root / "project/inc/ml307y/base_gpio.h",
                root / "project/src/ml307y/extra_exports.list",
                root / "project/build/selection.py", root / "project/build/artifacts.py",
                root / "project/src/ml307y/SConscript", root / "SConscript-k", root / "SConstruct",
@@ -126,6 +154,24 @@ def base_fingerprint(root):
             digest.update(path.relative_to(root).as_posix().encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()[:20]
+
+def resolve_provision(root, product, arguments):
+    """Use this board's existing private configuration for ordinary alarm builds."""
+    root = Path(root).resolve()
+    requested = arguments.get("provision")
+    if requested:
+        provision = (root / requested).resolve()
+        provision.relative_to(root / "project")
+        if not provision.is_file():
+            raise ValueError("Provision header must exist within project")
+        return provision
+    if product == "alarm_button":
+        provision = (root / "project/private/alarm_cloud.h").resolve()
+        provision.relative_to(root / "project")
+        if provision.is_file():
+            return provision
+    return None
+
 
 def apply(env, root, arguments):
     from SCons.Script import SConsignFile, GetOption
@@ -155,11 +201,10 @@ def apply(env, root, arguments):
     env["TARGET_NAME"] = "ML307Y_" + spec["name"]
     env["PROJECT_GENERATED"] = str(generated)
     env["PROJECT_SOURCES"] = spec["sources"]
-    if arguments.get("provision"):
-        provision = (root / arguments["provision"]).resolve()
-        provision.relative_to(root / "project")
-        if not provision.is_file():
-            raise ValueError("Provision header must exist within project")
+    if target == "userapp":
+        env.Append(CPPDEFINES=[("ML307Y_SLEEP_MODE", "CM_PM_SLEEP_MODE_" + spec["sleep_mode"].upper())])
+    provision = resolve_provision(root, spec["name"], arguments)
+    if provision:
         env["PROJECT_PROVISION"] = str(provision)
         env.Append(CPPDEFINES=[("ALARM_BUTTON_PROVISION_HEADER", "<product_private_config.h>")])
     env.PrependUnique(CPPPATH=[str(generated)])
@@ -174,6 +219,7 @@ def apply(env, root, arguments):
             "/*-------------------------------------------define---------------------------------------------*/",
             '#define PROJECT_BASE_ID "' + base_id + '"',
             '#define PRODUCT_NAME "' + spec["name"] + '"',
+            '#define PROJECT_SLEEP_MODE_NAME "' + spec["sleep_mode"] + '"',
             "#define PRODUCT_ID " + str(spec["id"]) + "U",
             "#define PRODUCT_ENTRY " + spec["entry"],
             "#define PRODUCT_HAS_STORAGE " + str(int("storage" in spec["modules"])),
@@ -182,11 +228,13 @@ def apply(env, root, arguments):
         for device in DEVICES:
             header.append("#define PRODUCT_HAS_" + device.upper() + " " + str(int(device in spec["devices"])))
         for field, default in [("led_sdk_pin",-1),("buzzer_sdk_pin",16),
-                               ("wake_verified",False),("buzzer_hz",0)]:
+                               ("wake_verified",False)]:
             header.append("#define ALARM_BUTTON_" + field.upper() + " " + str(int(spec.get(field, default))))
         (generated / "product_build_config.h").write_text("\n".join(header)+"\n", encoding="utf-8")
         (output / "product-manifest.json").write_text(json.dumps(
-            {"product":spec,"base_id":base_id,"target":target},indent=2),encoding="utf-8")
+            {"product":spec,"base_id":base_id,"target":target,
+             "provision":provision.relative_to(root).as_posix() if provision else None},
+            indent=2),encoding="utf-8")
     if target == "kernel":
         env["LIB_RSP"] = str(base / "image/prebuilt_lib.rsp")
         env["EXPORT_RSP"] = str(base / "image/mandatory_link.rsp")

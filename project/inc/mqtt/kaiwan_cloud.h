@@ -117,6 +117,10 @@ typedef struct
     bool (*stop)(void *user);              /* 停止连接并释放传输状态。 */
     kaiwan_cloud_result_t (*publish)(void *user, const char *topic, const uint8_t *payload, size_t size,
                                  uint8_t qos, bool retained, uint32_t cookie); /* 排队发送，不等于业务确认。 */
+    /* 启动连接之前绑定；SDK 回调只通知，不执行应用业务。 */
+    void (*set_notify)(void *user, void (*notify)(void *), void *argument);
+    /* 距下一处理期限的毫秒数；0 需立即处理，UINT32_MAX 表示等待事件。 */
+    uint32_t (*next_wait)(void *user, uint32_t now);
 } kaiwan_transport_t;
 
 /* TLS 通道号和 CA 文件路径由模组适配层解释。 */

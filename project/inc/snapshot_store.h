@@ -32,6 +32,8 @@ typedef struct
     int warning; /* 可恢复损坏槽的保留告警。 */
     unsigned corrupt_mask; /* 曾检测为损坏、复用前需留存的槽位。 */
     bool ready; /* 读取验证成功后才允许写入。 */
+    bool has_confirmed_payload; /* 保留故障前已确认镜像，禁止恢复时覆盖未知提交。 */
+    uint8_t confirmed_payload[SNAPSHOT_MAXIMUM_PAYLOAD];
     uint8_t record[SNAPSHOT_BYTES];
     uint8_t verify[SNAPSHOT_BYTES]; /* 新写入槽的回读校验缓冲。 */
 } snapshot_store_t;

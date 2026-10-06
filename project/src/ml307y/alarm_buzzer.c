@@ -24,7 +24,7 @@ static alarm_buzzer_device_t alarm_buzzer_device;
 * Input          : user - 蜂鸣器器件；on - 目标状态
 * Output         : GPIO 电平或 PWM 占空比及已应用状态
 * Return         : true - 应用成功；false - SDK 写入失败
-* Attention      : 无源蜂鸣器静音使用零占空比，保持同一引脚复用
+* Attention      : 静音关闭 PWM 时钟；发声恢复原宏配置，关闭失败不得标记静音
 *******************************************************************************/
 static bool ml307y_alarm_buzzer_set(void *user, bool on)
 {
@@ -42,7 +42,9 @@ static bool ml307y_alarm_buzzer_set(void *user, bool on)
     if (device->frequency_hz)
     {
         period = 1000000000U / device->frequency_hz;
-        written = cm_pwm_open_ns(CM_PWM_DEV_0, period, on ? period / 2U : 0U) == 0;
+        written = on ? cm_pwm_open_ns(CM_PWM_DEV_0, period,
+                                      period * ALARM_BUZZER_DUTY_PERCENT / 100U) == 0
+                     : cm_pwm_close(CM_PWM_DEV_0) == 0;
     }
     else
     {
@@ -62,7 +64,7 @@ static bool ml307y_alarm_buzzer_set(void *user, bool on)
 * Input          : buzzer - 产品蜂鸣器接口；sdk_pin - CM GPIO 编号；frequency_hz - PWM 频率
 * Output         : 成功后绑定蜂鸣器输出接口
 * Return         : true - 就绪；false - 配置或 SDK 操作失败
-* Attention      : 频率为零沿用现有有源 GPIO 方式；真实器件类型仍待核验
+* Attention      : 本板 XCL-5020ATP 使用 PWM；频率零值仅保留给有源 GPIO 兼容调用
 *******************************************************************************/
 bool ml307y_alarm_buzzer_init(alarm_buzzer_interface_t *buzzer, int sdk_pin, uint32_t frequency_hz)
 {
@@ -75,12 +77,14 @@ bool ml307y_alarm_buzzer_init(alarm_buzzer_interface_t *buzzer, int sdk_pin, uin
     if (frequency_hz)
     {
         if (cm_iomux_set_pin_func(CM_IOMUX_PIN_74, CM_IOMUX_FUNC_FUNCTION1) != 0 ||
-            cm_pwm_open_ns(CM_PWM_DEV_0, 1000000000U / frequency_hz, 0U) != 0)
+            cm_pwm_open_ns(CM_PWM_DEV_0, 1000000000U / frequency_hz, 0U) != 0 ||
+            cm_pwm_close(CM_PWM_DEV_0) != 0)
         {
             return false;
         }
     }
-    else if (cm_iomux_set_pin_func(CM_IOMUX_PIN_74, CM_IOMUX_FUNC_FUNCTION2) != 0 ||
+    /* 当前底包中 GPIO14～17 必须使用功能 3；物理 74 脚对应 GPIO16。 */
+    else if (cm_iomux_set_pin_func(CM_IOMUX_PIN_74, CM_IOMUX_FUNC_FUNCTION3) != 0 ||
              cm_gpio_init((cm_gpio_num_e)sdk_pin, &output) != 0 ||
              cm_gpio_set_level((cm_gpio_num_e)sdk_pin, CM_GPIO_LEVEL_LOW) != 0)
     {

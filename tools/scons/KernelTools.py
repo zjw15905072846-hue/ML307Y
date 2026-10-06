@@ -92,8 +92,11 @@ def generate_img(target, source, env):
     """
     生成ap.img
     """
-    # 打印源文件路径（仅路径，不含文件名）
-    bin_dir = os.path.dirname(str(source[1]))
+    # 压缩器会原地改写文件；每次从独立的 objcopy 原始输出重建打包输入。
+    bin_dir = os.path.dirname(str(target[0]))
+    os.makedirs(bin_dir, exist_ok=True)
+    for binary in source[1:]:
+        shutil.copyfile(str(binary), os.path.join(bin_dir, os.path.basename(str(binary))))
 
     cmd = [sys.executable, env['IMAGE_COMPRESSOR'],  env['SCRIPTS_DIR'],
            env['LD_INI_SRC'], '0x10000', bin_dir]
@@ -101,7 +104,7 @@ def generate_img(target, source, env):
                             stderr=subprocess.STDOUT, check=False)
     if status.returncode != 0:
         print(status.stdout.decode('utf-8'))  # 解码并打印错误信息
-        return None
+        return status.returncode
 
     cmd = [sys.executable, env['PACKER'], '-b', bin_dir,
            '-i', env['LD_INI_SRC'], '-t', env['IMAGE_INFO_JSON']]
@@ -109,6 +112,7 @@ def generate_img(target, source, env):
                             stderr=subprocess.STDOUT, check=False)
     if status.returncode != 0:
         print(status.stdout.decode('utf-8'))  # 解码并打印错误信息
+        return status.returncode
     else:
         # 获取CP_TARGET对应的elf路径
         elf_path = os.path.join(env['IMAGE_DIR'], env['CP_TARGET'] + '.elf')
@@ -118,9 +122,11 @@ def generate_img(target, source, env):
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
         if status.returncode != 0:
             print(status.stdout.decode('utf-8'))  # 解码并打印错误信息
+            return status.returncode
         else:
             # print(status.stdout.decode('utf-8'))
             print('generate package Done')
+    return 0
 
 
 def generate_rsp(target, source, env):

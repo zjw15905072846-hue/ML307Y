@@ -15,6 +15,7 @@ typedef struct
     void (*set_wakeup)(void *user, void (*notify)(void *), void *argument);
     bool ready;
     bool wake_verified;
+    bool wake_configured; /* 本次运行已装配中断唤醒；与实板验证记录独立。 */
 } alarm_key_interface_t;
 
 typedef struct
@@ -34,9 +35,11 @@ typedef struct
 typedef struct
 {
     void *user;
-    /* 返回真实 VBAT 毫伏值，不推算未经标定的电量百分比。 */
+    /* 返回有效 VBAT 毫伏值；失败时调用方不得沿用旧值。 */
     bool (*read_voltage)(void *user, uint16_t *millivolts);
     bool ready;
+    /* 对同一次有效电压进行百分比估算；不是库仑计结果，不推断充电状态。 */
+    bool (*estimate_percent)(void *user, uint16_t millivolts, uint8_t *percent);
 } alarm_battery_interface_t;
 
 typedef struct

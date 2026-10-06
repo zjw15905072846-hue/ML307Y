@@ -20,7 +20,8 @@ def main():
         product = receipt["product"]
         base_id = receipt["base"]["base_id"]
         assert base_id == current_base, "Receipt uses an outdated base build"
-        spec = select(ROOT, {"product": product})
+        mode = receipt["sleep_mode"]
+        spec = select(ROOT, {"product": product, "sleep_mode": mode})
         assert receipt["sources"] == spec["sources"]
         assert receipt["entry"] == spec["entry"]
         assert receipt["product_id"] == spec["id"]
@@ -50,7 +51,10 @@ def main():
         assert (output / ".sconsign.dblite").is_file()
         header = (output / "generated/product_build_config.h").read_text()
         assert '#define PRODUCT_NAME "' + product + '"' in header
-        print(product + ": ELF entry, sources, generated config, cache, package and base hashes OK")
+        assert '#define PROJECT_SLEEP_MODE_NAME "' + mode + '"' in header
+        manifest = json.loads((output / "product-manifest.json").read_text())
+        assert manifest["product"]["sleep_mode"] == mode
+        print(product + ": ELF entry, sources, generated sleep mode, cache, package and base hashes OK")
     escaped = list((ROOT / "project").rglob("*.o"))
     assert not escaped, escaped
 

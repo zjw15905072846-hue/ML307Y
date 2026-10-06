@@ -91,14 +91,14 @@ static int snapshot_check(snapshot_store_t *snapshot, const uint8_t *data, size_
 }
 
 /*******************************************************************************
-* Function Name  : snapshot_read
+* Function Name  : snapshot_load
 * Description    : 扫描双快照并恢复最新完整提交
 * Input          : user - 存储上下文；data/size - 产品镜像输出
 * Output         : data - 选中的镜像
 * Return         : 空白、正常或明确错误
 * Attention      : 任何读取错误或外来格式阻止初始化
 *******************************************************************************/
-static int snapshot_read(void *user, void *data, size_t size)
+static int snapshot_load(void *user, void *data, size_t size)
 {
     snapshot_store_t *snapshot = user;
     uint64_t generations[2] = {0, 0};
@@ -171,12 +171,36 @@ static int snapshot_read(void *user, void *data, size_t size)
 }
 
 /*******************************************************************************
+* Function Name  : snapshot_read
+* Description    : 恢复产品镜像并记录启动时已核验的写入基线
+* Input          : user - 快照上下文；data/size - 产品镜像输出
+* Output         : data及已确认镜像
+* Return         : 明确的存储状态码
+* Attention      : 内部写重试只扫描介质，不替换故障前基线
+*******************************************************************************/
+static int snapshot_read(void *user, void *data, size_t size)
+{
+    snapshot_store_t *snapshot = user;
+    int result = snapshot_load(user, data, size);
+    if (result == STORAGE_OK)
+    {
+        memcpy(snapshot->confirmed_payload, data, size);
+        snapshot->has_confirmed_payload = true;
+    }
+    else if (result == STORAGE_EMPTY)
+    {
+        snapshot->has_confirmed_payload = false;
+    }
+    return result;
+}
+
+/*******************************************************************************
 * Function Name  : snapshot_write
 * Description    : 写入非活动快照并同步回读，完成后才切换代数
 * Input          : user - 上下文；data/size - 新产品镜像
 * Output         : 更新已确认的活动槽
 * Return         : true完整提交；false失败
-* Attention      : 失败后锁住写入，保留最后完整快照
+* Attention      : 故障后先扫描；只允许旧镜像或同一候选重试，其他镜像保持隔离
 *******************************************************************************/
 static bool snapshot_write(void *user, const void *data, size_t size)
 {
@@ -186,7 +210,33 @@ static bool snapshot_write(void *user, const void *data, size_t size)
     uint64_t checked = 0;
     size_t actual = 0;
     size_t bytes = SNAPSHOT_HEADER_BYTES + size;
-    if (!snapshot || !snapshot->ready || !data || size != snapshot->payload_size || snapshot->generation == UINT64_MAX)
+    uint8_t recovered[SNAPSHOT_MAXIMUM_PAYLOAD];
+    int result;
+    if (!snapshot || !data || !size || size > SNAPSHOT_MAXIMUM_PAYLOAD || size != snapshot->payload_size)
+    {
+        return false;
+    }
+    if (!snapshot->ready)
+    {
+        result = snapshot_load(snapshot, recovered, size);
+        if (result == STORAGE_OK)
+        {
+            /* 候选可能已经完整写入；另一业务的镜像不能覆盖未决提交。 */
+            if (memcmp(recovered, data, size) != 0 &&
+                (!snapshot->has_confirmed_payload || memcmp(recovered, snapshot->confirmed_payload, size) != 0))
+            {
+                snapshot->ready = false;
+                return false;
+            }
+        }
+        else if (result != STORAGE_EMPTY || snapshot->has_confirmed_payload)
+        {
+            snapshot->ready = false;
+            return false;
+        }
+        /* 即使读到了相同候选，也重新同步写入并核验后才返回提交成功。 */
+    }
+    if (snapshot->generation == UINT64_MAX)
     {
         return false;
     }
@@ -220,6 +270,8 @@ static bool snapshot_write(void *user, const void *data, size_t size)
     snapshot->generation = generation;
     snapshot->active = (int)slot;
     snapshot->corrupt_mask &= ~(1U << slot);
+    memcpy(snapshot->confirmed_payload, data, size);
+    snapshot->has_confirmed_payload = true;
     return true;
 }
 

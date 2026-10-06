@@ -507,8 +507,9 @@ kaiwan_result_t kaiwan_protocol_wrap_json(const kaiwan_protocol_config_t *config
     {
         return KAIWAN_ERROR_FORMAT;
     }
-    if (!kaiwan_ascii_is_exact(config->factory_code, sizeof(config->factory_code),
-                           KAIWAN_PROTOCOL_FACTORY_CODE_LENGTH))
+    /* V3.6 的 32 字符值只是示例；这里校验本地容量，不强制平台标识长度。 */
+    if (config->factory_code[0] == '\0' ||
+        memchr(config->factory_code, '\0', sizeof(config->factory_code)) == NULL)
     {
         return KAIWAN_ERROR_ARGUMENT;
     }

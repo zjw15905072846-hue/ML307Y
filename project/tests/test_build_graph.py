@@ -4,10 +4,44 @@ import subprocess
 import sys
 import unittest
 import re
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "project/build"))
+import selection
 
 class BuildGraphTests(unittest.TestCase):
+    def test_alarm_default_build_tracks_existing_private_config(self):
+        private = ROOT / "project/private/alarm_cloud.h"
+        if not private.is_file():
+            self.skipTest("This integration check needs the local private header")
+        result = subprocess.run([sys.executable, "-m", "SCons", "target=userapp",
+                                 "product=alarm_button", "-n", "--tree=all,prune"],
+                                cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout.replace("\\", "/"),
+                         r"(?m)^[| +\-]*project/private/alarm_cloud[.]h$",
+                         "A normal alarm build silently lost the provision header")
+
+    def test_provision_defaults_and_explicit_override_are_product_scoped(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "out", prefix="provision-test-") as temp:
+            root = Path(temp)
+            private = root / "project/private/alarm_cloud.h"
+            private.parent.mkdir(parents=True)
+            private.write_text("#define ALARM_BUTTON_CLOUD_ENABLED 1\n")
+            self.assertEqual(selection.resolve_provision(root, "alarm_button", {}), private)
+            self.assertIsNone(selection.resolve_provision(root, "template_test", {}))
+            explicit = root / "project/private/alternate.h"
+            explicit.write_text("#define ALARM_BUTTON_CLOUD_ENABLED 0\n")
+            self.assertEqual(selection.resolve_provision(root, "alarm_button",
+                             {"provision": "project/private/alternate.h"}), explicit)
+            with self.assertRaises(ValueError):
+                selection.resolve_provision(root, "alarm_button", {"provision": "missing.h"})
+            with self.assertRaises(ValueError):
+                selection.resolve_provision(root, "alarm_button", {"provision": "../outside.h"})
+            private.unlink()
+            self.assertIsNone(selection.resolve_provision(root, "alarm_button", {}))
+
     def test_kernel_map_is_generated_before_install(self):
         result = subprocess.run([sys.executable, "-m", "SCons", "target=kernel",
                                  "product=alarm_button", "-n", "-j4"],

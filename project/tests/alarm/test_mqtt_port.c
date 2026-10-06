@@ -1,5 +1,6 @@
 /*------------------------------------------includes--------------------------------------------*/
 #include "test_support.h"
+#include <stdarg.h>
 #include "../../src/ml307y/mqtt_port.c"
 
 /*-------------------------------------------define---------------------------------------------*/
@@ -21,13 +22,76 @@ typedef struct
 
 /*-------------------------------------------variables-------------------------------------------*/
 static cm_mqtt_client_t client;
+static unsigned short sent_id; /* SDK 先使用当前编号，再递增下一编号。 */
 static uint32_t now_ms;
 static unsigned received;
 static unsigned transmit_done;
 static unsigned faults;
 static unsigned online_count;
+static unsigned wake_notifications;
+static int configured_ping_seconds;
+static bool reject_ping_option;
+static bool reject_disconnect;
+static unsigned disconnect_calls;
+static int local_address_result = 4;
+static char local_address_text[46] = "10.37.151.65";
+static unsigned local_address_queries;
+static unsigned local_address_logs;
+static char last_address_log[160];
 
 /*-------------------------------------------function---------------------------------------------*/
+/*******************************************************************************
+* Function Name  : project_mqtt_local_address
+* Description    : 模拟底包查询的实际 MQTT 源地址
+* Input          : sdk_client - SDK 客户端；address/capacity - 输出缓冲
+* Output         : address - 当前查询结果的副本
+* Return         : local_address_result
+* Attention      : 可改变返回内容验证回调快照不会在后台被替换
+*******************************************************************************/
+int project_mqtt_local_address(void *sdk_client, char *address, size_t capacity)
+{
+    assert(sdk_client == &client && capacity >= sizeof(local_address_text));
+    ++local_address_queries;
+    if (client.state != CM_MQTT_STATE_CONNECTED)
+    {
+        address[0] = '\0';
+        return -2;
+    }
+    memcpy(address, local_address_text, sizeof(local_address_text));
+    return local_address_result;
+}
+
+/*******************************************************************************
+* Function Name  : ml307y_uart_diag_printf
+* Description    : 捕获统一串口入口的实际连接地址日志
+* Input          : format - 格式；可变参数 - 日志内容
+* Output         : last_address_log - 最近一行打印
+* Return         : 格式化长度
+* Attention      : 测试只验证文本和时机，不访问 UART 或真实网络
+*******************************************************************************/
+int ml307y_uart_diag_printf(const char *format, ...)
+{
+    va_list arguments;
+    int length;
+    va_start(arguments, format);
+    length = vsnprintf(last_address_log, sizeof(last_address_log), format, arguments);
+    va_end(arguments);
+    ++local_address_logs;
+    return length;
+}
+
+/*******************************************************************************
+* Function Name  : notify_background
+* Description    : 记录正常事件和队列溢出的唤醒通知
+* Input          : argument - 计数器地址
+* Output         : 唤醒次数
+* Return         : 无
+* Attention      : 通知只唤醒后台，不能替代业务回执
+*******************************************************************************/
+static void notify_background(void *argument)
+{
+    ++*(unsigned *)argument;
+}
 /*******************************************************************************
 * Function Name  : mock_exchange
 * Description    : 模拟原子交换的顺序语义
@@ -165,6 +229,14 @@ int cm_mqtt_client_set_opt(cm_mqtt_client_t *c, cm_mqtt_option_e option, void *p
     {
         c->callbacks = *(cm_mqtt_client_cb_t *)param;
     }
+    if (option == CM_MQTT_OPT_PING_CYCLE)
+    {
+        if (reject_ping_option)
+        {
+            return -1;
+        }
+        configured_ping_seconds = *(int *)param;
+    }
     return 0;
 }
 
@@ -178,7 +250,8 @@ int cm_mqtt_client_set_opt(cm_mqtt_client_t *c, cm_mqtt_option_e option, void *p
 *******************************************************************************/
 int cm_mqtt_client_connect(cm_mqtt_client_t *c, cm_mqtt_connect_options_t *option)
 {
-    (void)option;
+    assert(configured_ping_seconds > 0);
+    assert(configured_ping_seconds == option->keepalive);
     c->state = CM_MQTT_STATE_CONNECTING;
     return 0;
 }
@@ -194,7 +267,8 @@ int cm_mqtt_client_connect(cm_mqtt_client_t *c, cm_mqtt_connect_options_t *optio
 int cm_mqtt_client_subscribe(cm_mqtt_client_t *c, const char *topic[], const char qos[], int count)
 {
     assert(count == 1 && qos[0] == 1 && topic[0]);
-    ++c->id;
+    sent_id = c->id;
+    c->id = c->id == 65535 ? 1 : c->id + 1;
     return 1;
 }
 
@@ -210,7 +284,8 @@ int cm_mqtt_client_publish(cm_mqtt_client_t *c, const char *topic, const char *p
                            char flags)
 {
     assert(topic && payload && (flags & CM_MQTT_QOS_1));
-    ++c->id;
+    sent_id = c->id;
+    c->id = c->id == 65535 ? 1 : c->id + 1;
     return size;
 }
 
@@ -224,13 +299,18 @@ int cm_mqtt_client_publish(cm_mqtt_client_t *c, const char *topic, const char *p
 *******************************************************************************/
 int cm_mqtt_client_disconnect(cm_mqtt_client_t *c)
 {
+    ++disconnect_calls;
+    if (reject_disconnect)
+    {
+        return -1;
+    }
     c->state = CM_MQTT_STATE_DISCONNECTED;
     return 0;
 }
 
 /*******************************************************************************
 * Function Name  : cm_mqtt_client_get_msgid
-* Description    : 查询最新请求编号
+* Description    : 查询下一次发送使用的编号
 * Input          : c - 客户端
 * Output         : 无
 * Return         : 编号
@@ -377,13 +457,35 @@ static void transmit_result(uint32_t cookie, kaiwan_cloud_result_t result, void 
 static void connect_ready(ml307y_mqtt_state_t *m)
 {
     int qos = 1;
+    unsigned logs_before = local_address_logs;
+    unsigned queries_before = local_address_queries;
+    char expected_address[46];
+    memcpy(expected_address, local_address_text, sizeof(expected_address));
     client.state = CM_MQTT_STATE_CONNECTED;
     assert(client.callbacks.connack_cb(&client, 0, 0) == 0);
+    assert(local_address_queries == queries_before + 1U);
+    assert(local_address_logs == logs_before);
+    strcpy(local_address_text, "changed-after-callback");
     ml307y_poll(m, now_ms);
+    assert(local_address_logs == logs_before + 1U);
+    assert(strstr(last_address_log, "[project][mqtt-local-ip]"));
+    if (local_address_result == 4 || local_address_result == 6)
+    {
+        assert(strstr(last_address_log, local_address_result == 4 ? "family=IPv4" : "family=IPv6"));
+        assert(strstr(last_address_log, expected_address));
+        assert(!strstr(last_address_log, "changed-after-callback"));
+    }
+    else
+    {
+        assert(strstr(last_address_log, "family=unavailable local=unavailable result=-3"));
+        assert(!strstr(last_address_log, expected_address));
+    }
+    memcpy(local_address_text, expected_address, sizeof(local_address_text));
     assert(!ml307y_online(m));
-    assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == 0);
+    assert(client.callbacks.suback_cb(&client, sent_id, 1, &qos) == 0);
     ml307y_poll(m, now_ms);
     assert(ml307y_online(m));
+    assert(local_address_logs == logs_before + 1U);
 }
 
 /*******************************************************************************
@@ -403,24 +505,39 @@ int main(void)
     char first[] = "abc";
     char last[] = "def";
     unsigned i;
+    unsigned logs_before;
     int qos = 1;
+    client.id = 1;
     services.system.millis = clock_now;
     services.system.fault = fault;
     assert(ml307y_mqtt_create(&services));
     m = ((kaiwan_transport_t *)services.transport)->user;
+    assert(m->interface.set_notify && m->interface.next_wait);
+    m->interface.set_notify(m, notify_background, &wake_notifications);
     kaiwan_cloud_config_init(&config);
     strcpy(config.local_imei, "123456789012345");
     strcpy(config.broker_host, "test.invalid");
     strcpy(config.client_id, "test-client");
     strcpy(config.platform_up_topic, "up");
     strcpy(config.platform_down_topic, "down");
+    reject_ping_option = true;
+    assert(ml307y_start(m, &config, &callbacks) == KAIWAN_CLOUD_ERROR_CONFIG);
+    assert(!m->wanted && !m->configured);
+    reject_ping_option = false;
     assert(ml307y_start(m, &config, &callbacks) == KAIWAN_CLOUD_OK);
+    assert(configured_ping_seconds == config.keepalive_seconds);
     ml307y_poll(m, 0);
     assert(!ml307y_online(m));
     connect_ready(m);
     assert(online_count == 1);
+    assert(wake_notifications == 2U);
+    assert(m->interface.next_wait(m, now_ms) == UINT32_MAX);
+    i = local_address_logs;
+    ml307y_poll(m, now_ms);
+    assert(local_address_logs == i);
     assert(client.callbacks.publish_cb(&client, 5, "down", 6, 3, first) == 0);
     first[0] = 'X';
+    assert(m->interface.next_wait(m, now_ms) == 0);
     ml307y_poll(m, 0);
     assert(received == 0);
     assert(client.callbacks.publish_cb(&client, 5, NULL, 6, 3, last) == 0);
@@ -428,7 +545,8 @@ int main(void)
     assert(received == 1);
     assert(ml307y_publish(m, "up", (const uint8_t *)"alarm", 5, 1, false, 42) == KAIWAN_CLOUD_OK);
     assert(transmit_done == 0);
-    assert(client.callbacks.puback_cb(&client, client.id, 0) == 0);
+    assert(m->interface.next_wait(m, now_ms) == config.command_timeout_ms);
+    assert(client.callbacks.puback_cb(&client, sent_id, 0) == 0);
     ml307y_poll(m, 0);
     assert(transmit_done == 1);
 
@@ -438,18 +556,21 @@ int main(void)
     client.callbacks.connack_cb(&client, 0, 0);
     ml307y_poll(m, 0);
     assert(received == 1 && !ml307y_online(m));
-    client.callbacks.suback_cb(&client, client.id, 1, &qos);
+    client.callbacks.suback_cb(&client, sent_id, 1, &qos);
     ml307y_poll(m, 0);
     assert(ml307y_online(m));
     /* Queue overflow invalidates all pending events, including a delayed SUBACK. */
     for (i = 0; i < ML307Y_MQTT_EVENTS; ++i)
     {
-        assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == 0);
+        assert(client.callbacks.suback_cb(&client, sent_id, 1, &qos) == 0);
     }
-    assert(client.callbacks.suback_cb(&client, client.id, 1, &qos) == -1);
+    assert(client.callbacks.suback_cb(&client, sent_id, 1, &qos) == -1);
+    i = local_address_logs;
+    assert(m->interface.next_wait(m, now_ms) == 0);
     ml307y_poll(m, 0);
     assert(faults > 0);
     assert(!ml307y_online(m));
+    assert(local_address_logs == i);
     while (osMessageQueueGetCount(m->events))
     {
         ml307y_poll(m, now_ms);
@@ -460,7 +581,7 @@ int main(void)
     now_ms += config.command_timeout_ms;
     ml307y_poll(m, now_ms);
     assert(!m->publishing && transmit_done == 1);
-    client.callbacks.puback_cb(&client, client.id, 0);
+    client.callbacks.puback_cb(&client, sent_id, 0);
     ml307y_poll(m, now_ms);
     assert(transmit_done == 1);
     assert(ml307y_stop(m));
@@ -471,6 +592,43 @@ int main(void)
     now_ms += config.command_timeout_ms;
     ml307y_poll(m, now_ms);
     assert(!m->connecting && !ml307y_online(m));
+    connect_ready(m);
+    reject_disconnect = true;
+    i = disconnect_calls;
+    assert(!ml307y_stop(m));
+    assert(!m->wanted && !ml307y_online(m));
+    reject_disconnect = false;
+    now_ms += 5000U;
+    assert(ml307y_stop(m));
+    assert(disconnect_calls == i + 2U);
+    i = online_count;
+    logs_before = local_address_logs;
+    /* 停止以后到达的旧 CONNACK/SUBACK 不得重新订阅上线。 */
+    assert(client.callbacks.connack_cb(&client, 0, 0) == 0);
+    ml307y_poll(m, now_ms);
+    assert(!m->wanted && !ml307y_online(m) && online_count == i);
+    assert(local_address_logs == logs_before + 1U);
+    assert(strstr(last_address_log, "family=unavailable local=unavailable result=-2"));
+    /* IPv6 与查询失败均应继续原订阅流程；失败不能沿用上次地址。 */
+    assert(ml307y_start(m, &config, &callbacks) == KAIWAN_CLOUD_OK);
+    local_address_result = 6;
+    strcpy(local_address_text, "240E:87C:887:F8B5::1");
+    connect_ready(m);
+    /* 成功连接紧接着断开时，保留快照打印，但不把旧事件用于上线。 */
+    logs_before = local_address_logs;
+    assert(client.callbacks.connack_cb(&client, 0, CM_MQTT_CONN_STATE_SUCCESS) == 0);
+    assert(local_address_logs == logs_before);
+    assert(client.callbacks.connack_cb(&client, 0, CM_MQTT_CONN_STATE_NET_ERR) == 0);
+    ml307y_poll(m, now_ms);
+    assert(local_address_logs == logs_before + 1U && !ml307y_online(m));
+    assert(strstr(last_address_log, "family=IPv6 local=240E:87C:887:F8B5::1"));
+    i = local_address_queries;
+    assert(client.callbacks.connack_cb(&client, 0, CM_MQTT_CONN_STATE_NET_ERR) == 0);
+    ml307y_poll(m, now_ms);
+    assert(local_address_queries == i);
+    local_address_result = -3;
+    connect_ready(m);
+    assert(ml307y_stop(m));
     puts("CM MQTT: SUBACK gate, fragments, deep copy, PUBACK, generation and overflow OK");
     return 0;
 }

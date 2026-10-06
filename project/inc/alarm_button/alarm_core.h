@@ -71,14 +71,17 @@ typedef struct
 
 /* 只负责把事件交给传输队列；true 不表示收到云端业务确认。 */
 typedef bool (*alarm_send_callback_t)(void *user, const alarm_event_t *event, uint16_t sequence);
+/* 可选发送条件检查；false 只保留此事件，不阻挡后面已满足条件的事件。 */
+typedef bool (*alarm_event_ready_callback_t)(void *user, const alarm_event_t *event);
 
-/* 重试上下文只跟踪当前队首；事件删除仍由持久队列完成。 */
+/* 重试上下文只跟踪一个可发送事件；事件删除仍由持久队列完成。 */
 typedef struct
 {
     alarm_event_store_t *store;
     alarm_send_callback_t send;
+    alarm_event_ready_callback_t event_ready; /* NULL 时按原队列顺序发送；不得修改队列。 */
     void *user;
-    uint32_t event_id; /* 当前等待确认的队首事件。 */
+    uint32_t event_id; /* 当前等待确认的事件；较早的待补报记录可以继续保留。 */
     uint32_t sent_at; /* 最近成功入发送队列的时刻。 */
     uint32_t retry_at; /* 退避到期后才允许重试。 */
     uint32_t confirmation_ms; /* 等待业务回执的超时门限。 */
@@ -89,7 +92,7 @@ typedef struct
     bool inflight; /* 已发送但尚未收到匹配业务回执。 */
     bool retry_wait; /* 等待退避期结束。 */
     int last_error; /* 最近一次发送或业务确认故障。 */
-    /* 当前队首本次运行期间的全部已入发送队列序号；跨重启用持久计数防串单。 */
+    /* 当前事件本次运行期间的全部已入发送队列序号；跨重启用持久计数防串单。 */
     uint8_t attempts[8192];
 } alarm_event_reporter_t;
 

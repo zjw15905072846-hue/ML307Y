@@ -18,6 +18,16 @@ typedef struct
     bool csq_valid; /* false 时不得把 csq 当成真实采样值。 */
 } device_info_t;
 
+/* 射频请求与实测验证分开；READY 表示功能模式及 PDP 已就绪。 */
+typedef enum
+{
+    SYSTEM_RADIO_OFF,       /* CFUN 关闭且读回匹配。 */
+    SYSTEM_RADIO_RESTORING, /* 恢复模式或等待 PDP。 */
+    SYSTEM_RADIO_READY,     /* 可以启动 MQTT。 */
+    SYSTEM_RADIO_STOPPING,  /* 等待射频关闭确认。 */
+    SYSTEM_RADIO_ERROR      /* 保持工作锁，按期限重试。 */
+} system_radio_state_t;
+
 /* RTOS、设备信息和电源管理端口；回调归属由平台实现。 */
 typedef struct
 {
@@ -42,8 +52,24 @@ typedef struct
     bool (*random)(uint8_t *output, size_t size);
     /* module只传固定诊断名，禁止包含账户、密钥或报文。 */
     void (*fault)(const char *module, int error);
-    /* 由前台唯一所有者管理；只有业务静止且板唤醒已验证才能解除。 */
+    /* 前台工作锁需求；平台合并前后台需求后才允许解锁。 */
     void (*power_hold)(void *user, bool hold);
+    /* 后台工作锁需求；网络、存储或业务确认未完成时保持。 */
+    void (*power_background_hold)(void *user, bool hold);
+    /* 后台普通任务按需输出 SDK 休眠状态，不在回调内打印。 */
+    void (*power_diagnostic)(void *user);
+    /* 射频接口仅由后台调用；request 不等待，poll 在任务中推进并核对模式。 */
+    void (*radio_request)(void *user, bool enabled, uint32_t now);
+    void (*radio_poll)(void *user, uint32_t now);
+    system_radio_state_t (*radio_state)(void *user, int *error);
+    uint32_t (*radio_next_wait)(void *user, uint32_t now);
+    void (*radio_set_notify)(void *user, void (*notify)(void *), void *argument);
+    /* 可选云流程诊断；stage 只允许固定名称，value 仅为序号或事件 ID，禁止传凭据。 */
+    void (*diagnostic)(const char *stage, uint32_t value, int result);
+    /* 可选发送日志；payload 为实际 MQTT 文本，回调同步消费且不得保留指针。 */
+    /* result 仅表示传输入队结果，不能作为平台确认；不传登录凭据或 AES 密钥。 */
+    void (*packet_log)(const char *kind, uint16_t sequence, const char *topic,
+                       const uint8_t *payload, size_t size, int result);
 } system_interface_t;
 
 /*-------------------------------------------function---------------------------------------------*/

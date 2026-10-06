@@ -57,10 +57,10 @@ map = env.File(str(elf[0]).replace(".elf", ".map"))
 env.SideEffect(map, elf)
 
 
-# step4:段拷贝
-ap_flash = env.FlashBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_flash'), elf)
-ap_psram = env.PsramBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_psram'), elf)
-ap_sysram = env.SysramBin(os.path.join(env['IMAGE_DIR'], 'bin', 'ap_sysram'), elf)
+# step4:段拷贝；原始机器码与压缩输出隔离，避免增量打包重复压缩。
+ap_flash = env.FlashBin(os.path.join(env['IMAGE_DIR'], 'origin_bins', 'ap_flash'), elf)
+ap_psram = env.PsramBin(os.path.join(env['IMAGE_DIR'], 'origin_bins', 'ap_psram'), elf)
+ap_sysram = env.SysramBin(os.path.join(env['IMAGE_DIR'], 'origin_bins', 'ap_sysram'), elf)
 ap_asm = env.GenAsm(elf)
 
 # step5:打包
@@ -126,3 +126,4 @@ else:
 env.Requires(elf, lib_rsp)
 env.Clean(elf, map)  # 执行scons -c时删除与elf相关的附加文件
 env.Clean(elf, os.path.join(env['IMAGE_DIR'], 'bin'))
+env.Clean(elf, os.path.join(env['IMAGE_DIR'], 'origin_bins'))

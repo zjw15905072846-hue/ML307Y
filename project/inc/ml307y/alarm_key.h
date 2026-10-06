@@ -3,5 +3,5 @@
 #include "product_interface.h"
 
 /*-------------------------------------------function---------------------------------------------*/
-/* 直接配置本板 26 脚输入；唤醒未核验时前台轮询读取按键。 */
+/* 经配套底包把物理 26 脚配置为 AGPIO0 输入上拉；wake_verified 必须为 false。 */
 bool ml307y_alarm_key_init(alarm_key_interface_t *key, bool wake_verified);

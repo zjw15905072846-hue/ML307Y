@@ -84,7 +84,7 @@ void kaiwan_cloud_config_init(kaiwan_cloud_config_t *config)
     config->mqtt_version = 4U;
     config->qos = 1U;
     config->clean_session = true;
-    config->keepalive_seconds = 60U;
+    config->keepalive_seconds = 28800U;
     config->command_timeout_ms = 30000U;
     config->yield_ms = 100U;
     config->pdp_poll_ms = 1000U;

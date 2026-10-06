@@ -20,7 +20,7 @@ extern "C"
 #define KAIWAN_PROTOCOL_IMEI_LENGTH 15U          /* IMEI 固定数字长度 */
 #define KAIWAN_PROTOCOL_IMSI_LENGTH 15U          /* IMSI 固定数字长度 */
 #define KAIWAN_PROTOCOL_ICCID_LENGTH 20U         /* ICCID 固定数字长度 */
-#define KAIWAN_PROTOCOL_FACTORY_CODE_LENGTH 32U  /* 平台 factoryCode 要求的固定长度 */
+#define KAIWAN_PROTOCOL_FACTORY_CODE_LENGTH 32U  /* 本地 factoryCode 最大字符数，不是协议要求的固定长度。 */
 #define KAIWAN_PROTOCOL_AES_KEY_LENGTH 16U       /* AES-128 密钥长度 */
 #define KAIWAN_PROTOCOL_AES_IV_LENGTH 16U        /* AES-CBC IV 长度 */
 #define KAIWAN_PROTOCOL_FRAME_OVERHEAD 16U    /* 帧头、固定字段、CRC和END总长度 */

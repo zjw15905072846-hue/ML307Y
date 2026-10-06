@@ -21,6 +21,7 @@
   "devices": ["key", "led", "buzzer", "battery"],
   "resources": [
     "PIN:26",
+    "PIN:96",
     "PIN:74",
     "PWM:0",
     "UART:0",
@@ -29,8 +30,7 @@
     "STORE:alarm_button"
   ],
   "wake_verified": false,
-  "led_sdk_pin": -1,
+  "led_sdk_pin": 41,
   "buzzer_sdk_pin": 16,
-  "buzzer_kind": "unverified",
-  "buzzer_hz": 0
+  "buzzer_kind": "passive"
 }

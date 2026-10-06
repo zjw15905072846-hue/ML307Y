@@ -81,6 +81,10 @@ static bool write_file(void *user, unsigned slot, const void *data, size_t size)
     {
         d->data[slot][size - 1] ^= 1;
     }
+    if (d->write_mode == 5)
+    {
+        d->read_error = 1;
+    }
     return d->write_mode != 2 && d->write_mode != 3;
 }
 
@@ -127,6 +131,54 @@ static void fresh(void)
 {
     memset(&disk, 0, sizeof(disk));
     assert(open_queue() == ALARM_OK);
+}
+
+/*******************************************************************************
+* Function Name  : test_retry_without_restart
+* Description    : 验证运行中写失败恢复、未知提交隔离及原请求重试不重复入队
+* Input          : 无
+* Output         : 队列、快照与写次数断言
+* Return         : 无；断言失败终止测试
+* Attention      : 完整写入后同步或回读失败时，禁止另一候选镜像覆盖它
+*******************************************************************************/
+static void test_retry_without_restart(void)
+{
+    alarm_event_t event = {0};
+    uint32_t id;
+    uint16_t sequence;
+    unsigned mode;
+    unsigned writes;
+    event.event_type = 0x0c;
+    for (mode = 1; mode <= 5; ++mode)
+    {
+        fresh();
+        event.uptime_ms = 100U;
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK);
+        event.uptime_ms = 200U;
+        disk.write_mode = (int)mode;
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_ERROR_STORAGE && id == 0);
+        disk.write_mode = 0;
+        disk.read_error = 0;
+        if (mode == 3 || mode == 5)
+        {
+            writes = disk.writes;
+            assert(alarm_store_sequence(&queue, &sequence) == ALARM_ERROR_STORAGE);
+            assert(disk.writes == writes && queue.image.count == 1);
+        }
+        assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK && id == 2);
+        assert(queue.image.count == 2 && queue.image.events[1].uptime_ms == 200U);
+        assert(open_queue() == ALARM_OK && queue.image.count == 2);
+    }
+    fresh();
+    disk.write_mode = 1;
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_ERROR_STORAGE);
+    disk.write_mode = 0;
+    disk.read_error = 1;
+    writes = disk.writes;
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_ERROR_STORAGE);
+    assert(disk.writes == writes && queue.image.count == 0);
+    disk.read_error = 0;
+    assert(alarm_store_enqueue(&queue, &event, &id) == ALARM_OK && id == 1);
 }
 
 /*******************************************************************************
@@ -213,7 +265,8 @@ int main(void)
     assert(queue.image.count == ALARM_CAPACITY);
     disk.write_mode = 0;
     assert(open_queue() == ALARM_OK && queue.image.count == ALARM_CAPACITY);
-    puts("snapshot: blank, recovery, foreign, read/short-write/sync/verify faults, full, delete "
+    test_retry_without_restart();
+    puts("snapshot: runtime retry, uncertain commit isolation, blank, recovery, foreign, read/short-write/sync/verify faults, full, delete "
          "failure OK");
     return 0;
 }

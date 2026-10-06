@@ -9,7 +9,7 @@
 int ml307y_uart_diag_init(void);
 
 /* 从普通任务输出一行文本；成功返回含 CRLF 的字节数，失败返回负值。 */
-/* 不在中断或串口回调调用，也不通过诊断口输出账户、密钥或报文。 */
+/* 不在中断或串口回调调用；禁止输出登录凭据及密钥，业务报文由独立宏控制打印。 */
 int ml307y_uart_diag_printf(const char *format, ...);
 
 #endif

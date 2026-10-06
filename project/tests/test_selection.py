@@ -1,11 +1,13 @@
 """Explicit source/resource isolation and matched-artifact regressions."""
 from pathlib import Path
 import copy
+import importlib.util
 import json
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "project/build"))
@@ -48,6 +50,59 @@ class ProductSelectionTests(unittest.TestCase):
             self.assertFalse(any("access_control" in path or "custom/" in path or "test/" in path
                                 for path in spec["sources"]))
 
+    def test_sleep_mode_default_and_deep_selection(self):
+        self.assertEqual(select(self.root, {"product": "alarm_button"})["sleep_mode"], "deep")
+        self.assertEqual(select(self.root, {"product": "template_test"})["sleep_mode"], "light")
+        self.assertEqual(select(self.root, {"product": "alarm_button", "sleep_mode": "deep"})["sleep_mode"], "deep")
+        self.assertEqual(select(self.root, {"product": "alarm_button", "sleep_mode": "light"})["sleep_mode"], "light")
+
+    def test_build_script_passes_resolved_product_sleep_mode(self):
+        module_spec = importlib.util.spec_from_file_location("build_product_under_test", ROOT / "project/tools/build_product.py")
+        builder = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(builder)
+        scenarios = ((["alarm_button"], "deep"), (["template_test"], "light"),
+                     (["alarm_button", "--sleep-mode", "light"], "light"))
+        for arguments, expected in scenarios:
+            with self.subTest(arguments=arguments), patch.object(builder, "ROOT", self.root), \
+                    patch.object(builder, "base_fingerprint", return_value="test-base"), \
+                    patch.object(builder.sys, "argv", ["build_product.py"] + arguments), \
+                    patch.object(builder.subprocess, "run") as run, patch("builtins.print"):
+                run.return_value.returncode = 1
+                with self.assertRaises(SystemExit):
+                    builder.main()
+                command = run.call_args.args[0]
+                self.assertIn("sleep_mode=" + expected, command)
+                self.assertIn("target=kernel", command)
+                self.assertFalse((self.root / "out/project-build.lock").exists())
+
+    def test_invalid_sleep_mode_and_template_override_rejected(self):
+        for mode in ("", "DEEP", "deepsleep", "0", "active"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                select(self.root, {"product": "alarm_button", "sleep_mode": mode})
+        with self.assertRaises(ValueError):
+            select(self.root, {"product": "template_test", "sleep_mode": "deep"})
+
+    def test_led_requires_supported_hal_mapping_and_physical_resource(self):
+        manifest = json.loads((self.root / "project/build/manifests/alarm_button.json").read_text())
+        self.alarm_change(led_sdk_pin=41, resources=[r for r in manifest["resources"] if r != "PIN:96"])
+        with self.assertRaises(ValueError):
+            select(self.root, {"product": "alarm_button"})
+        resources = [r for r in manifest["resources"] if r != "PIN:96"] + ["PIN:96"]
+        for invalid_pin in (0, 26, 96, 100):
+            self.alarm_change(led_sdk_pin=invalid_pin, resources=resources)
+            with self.assertRaises(ValueError):
+                select(self.root, {"product": "alarm_button"})
+        self.alarm_change(led_sdk_pin=41, resources=resources)
+        self.assertEqual(select(self.root, {"product": "alarm_button"})["led_sdk_pin"], 41)
+
+    def test_unimplemented_wakeup_and_wrong_buzzer_pin_are_rejected(self):
+        self.alarm_change(wake_verified=True)
+        with self.assertRaises(ValueError):
+            select(self.root, {"product": "alarm_button"})
+        self.alarm_change(wake_verified=False, buzzer_sdk_pin=17)
+        with self.assertRaises(ValueError):
+            select(self.root, {"product": "alarm_button"})
+
     def test_uart0_diagnostic_is_built_and_prints_before_boot_checks(self):
         for product in ("alarm_button", "template_test"):
             spec = select(self.root, {"product": product})
@@ -84,6 +139,19 @@ class ProductSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select(self.root, {"product": "alarm_button"})
 
+    def test_buzzer_requires_pwm_resource(self):
+        manifest = json.loads((self.root / "project/build/manifests/alarm_button.json").read_text())
+        self.alarm_change(resources=[item for item in manifest["resources"] if item != "PWM:0"])
+        with self.assertRaises(ValueError):
+            select(self.root, {"product": "alarm_button"})
+
+    def test_buzzer_frequency_has_no_legacy_manifest_override(self):
+        for frequency in (0, 4000):
+            with self.subTest(frequency=frequency):
+                self.alarm_change(buzzer_hz=frequency)
+                with self.assertRaises(ValueError):
+                    select(self.root, {"product": "alarm_button"})
+
     def test_duplicate_storage_namespace(self):
         self.alarm_change(storage_namespace="template_test")
         with self.assertRaises(ValueError):
@@ -112,7 +180,8 @@ class ProductSelectionTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 select(self.root, {"product": "alarm_button"})
 
-    def test_foreign_base_and_corrupted_exports(self):
+    @patch("artifacts.verify_base_machine_code")
+    def test_foreign_base_and_corrupted_exports(self, verify_machine_code):
         base = self.root / "out/project-base/test-id"
         for name in BASE_FILES:
             file = base / name
@@ -120,6 +189,7 @@ class ProductSelectionTests(unittest.TestCase):
             file.write_bytes(b"matched-" + name.encode())
         record_base(self.root, "test-id")
         self.assertEqual(verify_base(self.root, "test-id")["base_id"], "test-id")
+        self.assertEqual(verify_machine_code.call_count, 2)
         (base / "ld/import_func.ld").write_bytes(b"wrong export addresses")
         with self.assertRaises(ValueError):
             verify_base(self.root, "test-id")

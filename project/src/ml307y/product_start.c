@@ -16,6 +16,7 @@
 #endif
 #include "cm_os.h"
 #include "cm_sys.h"
+#include "cm_pm.h"
 #include <string.h>
 #if PRODUCT_HAS_MQTT
 #include "mbedtls/aes.h"
@@ -53,10 +54,12 @@ static bool product_boot_initialize(void)
 
     if (ml307y_uart_diag_init() == 0)
     {
-        ml307y_uart_diag_printf("00000!\n");
         ml307y_uart_diag_printf("[project] UART0 ready");
         ml307y_uart_diag_printf("[project] boot attempt=%u tick=%u", product_boot_attempts,
                                 (unsigned)osKernelGetTickCount());
+        ml307y_uart_diag_printf("[project] firmware=%s %s product=%s", __DATE__, __TIME__, PRODUCT_NAME);
+        ml307y_uart_diag_printf("[project] diagnostic=mqtt-vendor4872-20260928");
+        ml307y_uart_diag_printf("[project] power-on-reason=%d", (int)cm_pm_get_power_on_reason());
     }
     /* 先核对编译所用底包身份，避免错误接口表进入产品初始化。 */
     if (strcmp(project_base_identity(), PROJECT_BASE_ID) != 0)
@@ -86,14 +89,18 @@ static bool product_boot_initialize(void)
         selected_product_services.system.fault("alarm-led-init", -1);
         return false;
     }
+    ml307y_uart_diag_printf("[project] alarm LED ready");
 #endif
 #if PRODUCT_HAS_BUZZER
     if (!ml307y_alarm_buzzer_init(&selected_product_services.buzzer, ALARM_BUTTON_BUZZER_SDK_PIN,
-                                  ALARM_BUTTON_BUZZER_HZ))
+                                  ALARM_BUZZER_FREQUENCY_HZ))
     {
         selected_product_services.system.fault("alarm-buzzer-init", -1);
         return false;
     }
+    ml307y_uart_diag_printf("[project] alarm buzzer ready hz=%u duty=%u%%",
+                            (unsigned)ALARM_BUZZER_FREQUENCY_HZ,
+                            (unsigned)ALARM_BUZZER_DUTY_PERCENT);
 #endif
 #if PRODUCT_HAS_BATTERY
     ml307y_alarm_battery_bind(&selected_product_services.battery);
@@ -128,7 +135,7 @@ static bool product_boot_initialize(void)
 
 /*******************************************************************************
 * Function Name  : product_boot_task
-* Description    : 执行一次产品初始化，随后在带延时的循环中保持任务存活
+* Description    : 执行一次产品初始化，随后保持常驻并输出本轮限次存活诊断
 * Input          : argument - 保留
 * Output         : 产品启动结果
 * Return         : 不返回
@@ -136,14 +143,33 @@ static bool product_boot_initialize(void)
 *******************************************************************************/
 static void product_boot_task(void *argument)
 {
+    bool initialized;
+    unsigned diagnostic_count = 0;
+    osSemaphoreId_t idle_wait;
     (void)argument;
     ++product_boot_attempts;
-    (void)product_boot_initialize();
-    ml307y_uart_diag_printf("Hello World!\n");
+    initialized = product_boot_initialize();
+    idle_wait = osSemaphoreNew(1U, 0U, NULL);
+    ml307y_uart_diag_printf("[project] initialization %s", initialized ? "complete" : "failed");
     while (1)
     {
-        ml307y_uart_diag_printf("11111\n");
-        osDelay(5U * osKernelGetTickFreq());
+        /* 本轮排障只输出六次，用递增 tick 区分日志静默与调度停滞。 */
+        if (diagnostic_count < 6U)
+        {
+            osDelay(5U * osKernelGetTickFreq());
+            ++diagnostic_count;
+            ml307y_uart_diag_printf("[project] scheduler alive tick=%u sample=%u/6",
+                                   (unsigned)osKernelGetTickCount(), diagnostic_count);
+        }
+        else if (idle_wait)
+        {
+            /* 保持任务常驻，不再每五秒无业务唤醒；不向此信号量投递。 */
+            (void)osSemaphoreAcquire(idle_wait, osWaitForever);
+        }
+        else
+        {
+            osDelay(60U * osKernelGetTickFreq());
+        }
     }
 }
 
